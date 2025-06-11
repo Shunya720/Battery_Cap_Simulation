@@ -95,9 +95,6 @@ def show_main_menu():
         - 日常運用での制御効果確認
         - 需要予測精度の影響評価
         """)
-        
-        if st.button("🚀 バッテリー計画システムを起動", use_container_width=True):
-            st.info("💡 サイドバーから「バッテリー計画システム」を選択してください")
     
     with col2:
         st.subheader("📊 容量シミュレーション比較")
@@ -115,9 +112,7 @@ def show_main_menu():
         - 投資対効果の事前評価
         - 用途別最適容量の選定
         """)
-        
-        if st.button("📊 容量シミュレーション比較を起動", use_container_width=True):
-            st.info("💡 サイドバーから「容量シミュレーション比較」を選択してください")
+    
     
     # 技術的特徴
     st.header("🛠️ 技術的特徴")
