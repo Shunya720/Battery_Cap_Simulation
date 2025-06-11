@@ -1,8 +1,5 @@
-# 最小構成 - 基本機能のみ
-streamlit
-pandas
-numpy
-
-# デプロイ成功後に段階的に追加:
-# plotly
-# openpyxl
+streamlit==1.28.0
+pandas==1.5.3
+numpy==1.24.3
+plotly==5.15.0
+python-dateutil==2.8.2
