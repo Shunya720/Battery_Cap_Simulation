@@ -445,14 +445,8 @@ def initialize_session_state():
     if 'simulation_stage' not in st.session_state:
         st.session_state.simulation_stage = 'data_upload'  # 'data_upload', 'simulation_config', 'results'
     # シミュレーション設定用のセッション状態も初期化
-    if 'sim_capacity_mode' not in st.session_state:
-        st.session_state.sim_capacity_mode = "範囲指定"
     if 'sim_num_capacities' not in st.session_state:
-        st.session_state.sim_num_capacities = 3
-    if 'sim_min_capacity' not in st.session_state:
-        st.session_state.sim_min_capacity = 20000
-    if 'sim_max_capacity' not in st.session_state:
-        st.session_state.sim_max_capacity = 100000
+        st.session_state.sim_num_capacities = 2  # デフォルトを2に変更
     if 'sim_power_scaling_method' not in st.session_state:
         st.session_state.sim_power_scaling_method = "capacity_ratio"
     if 'sim_annual_cycle_ratio' not in st.session_state:
@@ -644,82 +638,45 @@ def show_simulation_config_section():
     
     with st.expander("年間シミュレーション設定", expanded=True):
         
-        # 容量設定（簡略化）
+        # 容量設定（個別入力のみ）
         st.subheader("比較容量設定")
         
         col1, col2 = st.columns(2)
         with col1:
-            st.session_state.sim_capacity_mode = st.selectbox(
-                "容量設定方式",
-                ["範囲指定", "個別指定"],
-                index=0 if st.session_state.sim_capacity_mode == "範囲指定" else 1,
-                help="範囲指定：等間隔で複数容量を自動設定、個別指定：手動で各容量を設定",
-                key="capacity_mode_select"
+            st.session_state.sim_num_capacities = st.selectbox(
+                "比較容量数", 
+                [2, 3, 4, 5], 
+                index=[2, 3, 4, 5].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [2, 3, 4, 5] else 0,
+                help="比較したいバッテリー容量の数を選択してください",
+                key="num_capacities_select"
             )
+        
+        with col2:
+            st.info("各容量を個別に入力してください")
+        
+        # 容量入力欄
+        cols = st.columns(5)
+        
+        # セッション状態で個別容量を保存
+        if 'sim_individual_capacities' not in st.session_state:
+            st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000, 300000]
         
         capacity_list = []
         
-        if st.session_state.sim_capacity_mode == "範囲指定":
-            with col2:
-                st.session_state.sim_num_capacities = st.selectbox(
-                    "比較容量数", 
-                    [3, 4, 5], 
-                    index=[3, 4, 5].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [3, 4, 5] else 0,
-                    key="num_capacities_select"
-                )
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.session_state.sim_min_capacity = st.number_input(
-                    "最小容量 (kWh)", 
-                    value=st.session_state.sim_min_capacity, 
+        for i in range(st.session_state.sim_num_capacities):
+            with cols[i]:
+                st.session_state.sim_individual_capacities[i] = st.number_input(
+                    f"容量{i+1} (kWh)", 
+                    value=st.session_state.sim_individual_capacities[i],
                     min_value=10000, max_value=500000, step=10000,
-                    key="min_capacity_input"
+                    key=f"manual_capacity_{i}_input"
                 )
-            with col2:
-                st.session_state.sim_max_capacity = st.number_input(
-                    "最大容量 (kWh)", 
-                    value=max(st.session_state.sim_max_capacity, st.session_state.sim_min_capacity), 
-                    min_value=st.session_state.sim_min_capacity, max_value=500000, step=10000,
-                    key="max_capacity_input"
-                )
-            with col3:
-                if st.session_state.sim_num_capacities > 1:
-                    step_size = (st.session_state.sim_max_capacity - st.session_state.sim_min_capacity) / (st.session_state.sim_num_capacities - 1)
-                    capacity_list = [int(st.session_state.sim_min_capacity + i * step_size) for i in range(st.session_state.sim_num_capacities)]
-                    st.info(f"生成容量:\n" + "\n".join([f"{cap:,}kWh" for cap in capacity_list]))
-                else:
-                    capacity_list = [st.session_state.sim_min_capacity]
+                capacity_list.append(st.session_state.sim_individual_capacities[i])
         
-        else:  # 個別指定
-            with col2:
-                st.session_state.sim_num_capacities = st.selectbox(
-                    "比較容量数", 
-                    [2, 3, 4], 
-                    index=[2, 3, 4].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [2, 3, 4] else 1,
-                    key="num_capacities_manual_select"
-                )
-            
-            cols = st.columns(4)
-            
-            # セッション状態で個別容量を保存
-            if 'sim_individual_capacities' not in st.session_state:
-                st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000]
-            
-            for i in range(st.session_state.sim_num_capacities):
-                with cols[i]:
-                    st.session_state.sim_individual_capacities[i] = st.number_input(
-                        f"容量{i+1} (kWh)", 
-                        value=st.session_state.sim_individual_capacities[i],
-                        min_value=10000, max_value=500000, step=10000,
-                        key=f"manual_capacity_{i}_input"
-                    )
-                    capacity_list.append(st.session_state.sim_individual_capacities[i])
-            
-            # 未使用の列は空白
-            for i in range(st.session_state.sim_num_capacities, 4):
-                with cols[i]:
-                    st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True, key=f"unused_capacity_{i}")
+        # 未使用の列は空白
+        for i in range(st.session_state.sim_num_capacities, 5):
+            with cols[i]:
+                st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True, key=f"unused_capacity_{i}")
         
         # 重複チェック
         if len(set(capacity_list)) != len(capacity_list):
