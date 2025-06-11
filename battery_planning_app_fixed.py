@@ -144,7 +144,7 @@ def main():
     battery_capacity = st.sidebar.number_input("蓄電池容量 (kWh)", value=48000, min_value=10000)
     max_power = st.sidebar.number_input("最大出力 (15分エネルギー値)", value=3000, min_value=100)
     efficiency = st.sidebar.number_input("効率", value=1.0, min_value=0.1, max_value=1.0)
-    initial_soc = st.sidebar.number_input("初期SOC (%)", value=4.5, min_value=0.0, max_value=100.0, step=0.1)
+    initial_soc = st.sidebar.number_input("初期SOC (%)", value=10.0, min_value=0.0, max_value=100.0, step=0.1)
     
     # リセットボタン（最適化パラメータをクリア）
     if has_optimized_params:
