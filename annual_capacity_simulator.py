@@ -476,7 +476,13 @@ def main():
         st.error("⚠️ コアロジック（battery_core_logic）が利用できません。ダミーデータでの動作となります。")
     
     # ステージ表示
-    st.subheader(f"現在のステージ: {{'data_upload': '1. データアップロード', 'simulation_config': '2. シミュレーション設定', 'results': '3. 結果表示'}.get(st.session_state.simulation_stage, st.session_state.simulation_stage)}")
+    stage_names = {
+        'data_upload': '1. データアップロード', 
+        'simulation_config': '2. シミュレーション設定', 
+        'results': '3. 結果表示'
+    }
+    current_stage_name = stage_names.get(st.session_state.simulation_stage, st.session_state.simulation_stage)
+    st.subheader(f"現在のステージ: {current_stage_name}")
     
     # ステージ1: 年間データアップロード
     if st.session_state.simulation_stage == 'data_upload' or st.session_state.annual_demand is None:
