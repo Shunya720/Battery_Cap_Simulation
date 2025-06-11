@@ -569,114 +569,6 @@ def show_data_upload_section():
             seasonal_variation = st.slider("季節変動 (%)", min_value=10, max_value=50, value=20, step=5, key="sample_seasonal")
         
         with col2:
-        if st.button("📅 月別詳細CSV", use_container_width=True, key="download_monthly_csv"):
-            try:
-                monthly_detail_data = []
-                
-                for capacity, result in results.items():
-                    if 'monthly_results' in result:
-                        for month, monthly_result in result['monthly_results'].items():
-                            monthly_detail_data.append({
-                                '容量(kWh)': capacity,
-                                '月': month,
-                                'ピーク削減(kW)': monthly_result['peak_reduction'],
-                                '需要幅改善(kW)': monthly_result['range_improvement'],
-                                '月間放電(kWh)': monthly_result['monthly_discharge'],
-                                'ピーク制御比率': monthly_result['optimized_params'].get('peak_power_ratio', 1.0),
-                                'ボトム制御比率': monthly_result['optimized_params'].get('bottom_power_ratio', 1.0)
-                            })
-                
-                monthly_detail_df = pd.DataFrame(monthly_detail_data)
-                monthly_csv = monthly_detail_df.to_csv(index=False)
-                
-                st.download_button(
-                    label="月別詳細をダウンロード",
-                    data=monthly_csv,
-                    file_name=f"annual_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="download_monthly_detail_csv"
-                )
-            except Exception as e:
-                st.error(f"月別詳細CSV生成エラー: {e}")
-    
-    with col3:
-        if st.button("🌍 季節別統計CSV", use_container_width=True, key="download_seasonal_csv"):
-            try:
-                seasonal_detail_data = []
-                seasons = ['spring', 'summer', 'autumn', 'winter']
-                season_names = ['春', '夏', '秋', '冬']
-                
-                for capacity, result in results.items():
-                    for season, season_name in zip(seasons, season_names):
-                        seasonal_detail_data.append({
-                            '容量(kWh)': capacity,
-                            '季節': season_name,
-                            'ピーク削減(kW)': result['seasonal_stats'][season]['peak_reduction'],
-                            '平均削減(kW)': result['seasonal_stats'][season]['average_reduction'],
-                            '放電量(kWh)': result['seasonal_stats'][season]['total_discharge']
-                        })
-                
-                seasonal_detail_df = pd.DataFrame(seasonal_detail_data)
-                seasonal_csv = seasonal_detail_df.to_csv(index=False)
-                
-                st.download_button(
-                    label="季節別統計をダウンロード",
-                    data=seasonal_csv,
-                    file_name=f"annual_seasonal_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="download_seasonal_detail_csv"
-                )
-            except Exception as e:
-                st.error(f"季節別CSV生成エラー: {e}")
-
-
-# デバッグ機能
-def debug_annual_test():
-    """年間データ用デバッグ機能"""
-    st.sidebar.header("🔧 年間デバッグモード")
-    
-    if st.sidebar.button("年間テストデータ生成", key="debug_generate_data"):
-        with st.sidebar:
-            with st.spinner("年間テストデータ生成中..."):
-                # 簡易年間データ生成
-                np.random.seed(42)
-                base_demand = 5000
-                
-                annual_test_data = []
-                for day in range(365):
-                    # 季節変動
-                    seasonal_factor = 1 + 0.2 * np.sin(2 * np.pi * day / 365 - np.pi/2)
-                    
-                    # 日内パターン
-                    daily_pattern = []
-                    for hour in range(24):
-                        for quarter in range(4):
-                            time_factor = 1 + 0.3 * np.sin(2 * np.pi * (hour + quarter/4) / 24 - np.pi/3)
-                            noise = np.random.normal(0, 0.05)
-                            demand = base_demand * seasonal_factor * time_factor * (1 + noise)
-                            daily_pattern.append(max(demand, base_demand * 0.5))
-                    
-                    annual_test_data.extend(daily_pattern)
-                
-                st.session_state.annual_test_demand = np.array(annual_test_data)
-                st.sidebar.success(f"年間テストデータ生成完了: {len(annual_test_data):,}ステップ")
-    
-    if hasattr(st.session_state, 'annual_test_demand'):
-        if st.sidebar.button("テストデータを年間データに適用", key="debug_apply_data"):
-            st.session_state.annual_demand = st.session_state.annual_test_demand
-            st.session_state.simulation_stage = 'simulation_config'
-            st.sidebar.success("年間テストデータを適用しました")
-            st.rerun()
-
-
-if __name__ == "__main__":
-    # デバッグモードの表示
-    if st.sidebar.checkbox("🔧 年間デバッグモード", value=False, key="debug_mode_checkbox"):
-        debug_annual_test()
-    
-    main()
             daily_variation = st.slider("日内変動 (%)", min_value=10, max_value=50, value=30, step=5, key="sample_daily")
             noise_level = st.slider("ランダムノイズ (%)", min_value=1, max_value=10, value=5, step=1, key="sample_noise")
         
@@ -1334,7 +1226,7 @@ def display_annual_results():
                 st.error(f"サマリーCSV生成エラー: {e}")
     
     with col2:
-        if st.button("📅 月別詳細CSV", use_container_width=True):
+        if st.button("📅 月別詳細CSV", use_container_width=True, key="download_monthly_detail_btn"):
             try:
                 monthly_detail_data = []
                 
@@ -1359,13 +1251,14 @@ def display_annual_results():
                     data=monthly_csv,
                     file_name=f"annual_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="download_monthly_detail_csv"
                 )
             except Exception as e:
                 st.error(f"月別詳細CSV生成エラー: {e}")
     
     with col3:
-        if st.button("🌍 季節別統計CSV", use_container_width=True):
+        if st.button("🌍 季節別統計CSV", use_container_width=True, key="download_seasonal_detail_btn"):
             try:
                 seasonal_detail_data = []
                 seasons = ['spring', 'summer', 'autumn', 'winter']
@@ -1389,7 +1282,8 @@ def display_annual_results():
                     data=seasonal_csv,
                     file_name=f"annual_seasonal_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="download_seasonal_detail_csv"
                 )
             except Exception as e:
                 st.error(f"季節別CSV生成エラー: {e}")
@@ -1400,7 +1294,7 @@ def debug_annual_test():
     """年間データ用デバッグ機能"""
     st.sidebar.header("🔧 年間デバッグモード")
     
-    if st.sidebar.button("年間テストデータ生成"):
+    if st.sidebar.button("年間テストデータ生成", key="debug_generate_data"):
         with st.sidebar:
             with st.spinner("年間テストデータ生成中..."):
                 # 簡易年間データ生成
@@ -1427,15 +1321,16 @@ def debug_annual_test():
                 st.sidebar.success(f"年間テストデータ生成完了: {len(annual_test_data):,}ステップ")
     
     if hasattr(st.session_state, 'annual_test_demand'):
-        if st.sidebar.button("テストデータを年間データに適用"):
+        if st.sidebar.button("テストデータを年間データに適用", key="debug_apply_data"):
             st.session_state.annual_demand = st.session_state.annual_test_demand
+            st.session_state.simulation_stage = 'simulation_config'
             st.sidebar.success("年間テストデータを適用しました")
             st.rerun()
 
 
 if __name__ == "__main__":
     # デバッグモードの表示
-    if st.sidebar.checkbox("🔧 年間デバッグモード", value=False):
+    if st.sidebar.checkbox("🔧 年間デバッグモード", value=False, key="debug_mode_checkbox"):
         debug_annual_test()
     
     main()
