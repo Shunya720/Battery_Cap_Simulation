@@ -1,9 +1,8 @@
-# 基本的な requirements.txt (最小構成)
-streamlit==1.28.0
-pandas==1.5.3
-numpy==1.24.3
-plotly==5.15.0
+# 最小構成 - 基本機能のみ
+streamlit
+pandas
+numpy
 
-# オプション（必要に応じて追加）
-# openpyxl==3.1.2
-# python-dateutil==2.8.2
+# デプロイ成功後に段階的に追加:
+# plotly
+# openpyxl
