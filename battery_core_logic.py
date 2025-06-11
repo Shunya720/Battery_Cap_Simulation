@@ -794,4 +794,3 @@ class BatteryControlEngine:
         self.actual_data = np.full(96, np.nan)
         if self.soc_manager:
             self.soc_manager.reset_simulation(self.initial_soc)
-            '
