@@ -402,6 +402,10 @@ class AnnualBatteryCapacityComparator:
             cycle_target = result.get('annual_cycle_target', 0)
             cycle_actual = result.get('annual_discharge', 0)
             
+            # サイクル数計算（放電量 ÷ 容量）
+            target_cycles = cycle_target / capacity if capacity > 0 else 0
+            actual_cycles = cycle_actual / capacity if capacity > 0 else 0
+            
             summary.append({
                 '容量(kWh)': f"{capacity:,}",
                 '最大出力(kW)': f"{result['max_power']:.0f}",
@@ -411,6 +415,9 @@ class AnnualBatteryCapacityComparator:
                 'サイクル制約目標(MWh)': f"{cycle_target/1000:.1f}",
                 'サイクル制約実績(MWh)': f"{cycle_actual/1000:.1f}",
                 'サイクル目標/実績': f"{cycle_target/1000:.1f}/{cycle_actual/1000:.1f}",
+                'サイクル数目標': f"{target_cycles:.2f}",
+                'サイクル数実績': f"{actual_cycles:.2f}",
+                'サイクル数達成率(%)': f"{(actual_cycles/target_cycles*100):.1f}" if target_cycles > 0 else "0.0",
                 '年間サイクル制約': 'OK' if result['annual_cycle_constraint_satisfied'] else 'NG',
                 '春ピーク削減(kW)': f"{result['seasonal_stats']['spring']['peak_reduction']:.1f}",
                 '夏ピーク削減(kW)': f"{result['seasonal_stats']['summer']['peak_reduction']:.1f}",
@@ -865,22 +872,48 @@ def display_annual_results():
             - 容量 × サイクル比率で計算されます
             - 実績が目標±許容範囲内であれば「OK」、範囲外であれば「NG」
             
+            **サイクル数の計算方法:**
+            - 1サイクル = 設定容量と同量の放電
+            - サイクル数 = 年間放電量 ÷ バッテリー容量
+            - 例：容量50MWh、年間放電量100MWh → 2.0サイクル
+            
             **表示項目:**
-            - **サイクル制約目標**: 設定された年間放電目標値
-            - **サイクル制約実績**: シミュレーション結果の実際の年間放電量
+            - **サイクル制約目標**: 設定された年間放電目標値（MWh）
+            - **サイクル制約実績**: シミュレーション結果の実際の年間放電量（MWh）
             - **サイクル目標/実績**: 目標値/実績値の対比表示
+            - **サイクル数目標**: 目標放電量をサイクル数で表示
+            - **サイクル数実績**: 実際の放電量をサイクル数で表示
+            - **サイクル数達成率**: 実績サイクル数 ÷ 目標サイクル数 × 100%
             - **年間サイクル制約**: 制約条件を満たしているかの判定
             """)
             
             # 設定値の表示
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("年間サイクル比率", f"{st.session_state.sim_annual_cycle_ratio:.1f}")
             with col2:
                 st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f} MWh")
             with col3:
-                cycle_range_percent = (st.session_state.sim_annual_cycle_tolerance / (capacity_list[0] * st.session_state.sim_annual_cycle_ratio)) * 100
-                st.metric("許容範囲（%）", f"±{cycle_range_percent:.1f}%")
+                if capacity_list:
+                    cycle_range_percent = (st.session_state.sim_annual_cycle_tolerance / (capacity_list[0] * st.session_state.sim_annual_cycle_ratio)) * 100
+                    st.metric("許容範囲（%）", f"±{cycle_range_percent:.1f}%")
+            with col4:
+                st.metric("目標サイクル数", f"{st.session_state.sim_annual_cycle_ratio:.2f}")
+            
+            # サイクル数の例
+            st.write("**サイクル数の例:**")
+            example_data = []
+            for capacity in capacity_list:
+                target_discharge = capacity * st.session_state.sim_annual_cycle_ratio
+                example_data.append({
+                    '容量(kWh)': f"{capacity:,}",
+                    '目標放電量(MWh)': f"{target_discharge/1000:.1f}",
+                    '目標サイクル数': f"{st.session_state.sim_annual_cycle_ratio:.2f}",
+                    '許容範囲(MWh)': f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f}"
+                })
+            
+            example_df = pd.DataFrame(example_data)
+            st.dataframe(example_df, use_container_width=True)
     
     # タブで結果を整理
     tab1, tab2, tab3, tab4 = st.tabs(["年間需要比較", "季節別分析", "月別詳細", "推奨容量"])
@@ -932,7 +965,7 @@ def display_annual_results():
             st.error(f"年間グラフ作成エラー: {e}")
         
         # 年間統計
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.subheader("年間ピーク削減効果")
@@ -982,6 +1015,30 @@ def display_annual_results():
                 title="容量効率 (kW削減/MWh容量)"
             )
             st.plotly_chart(fig_efficiency, use_container_width=True)
+        
+        with col4:
+            st.subheader("サイクル数実績")
+            cycle_data = []
+            for capacity, result in results.items():
+                actual_cycles = result['annual_discharge'] / capacity if capacity > 0 else 0
+                cycle_data.append({
+                    'capacity': f"{capacity:,}kWh",
+                    'cycles': actual_cycles
+                })
+            
+            fig_cycles = px.bar(
+                pd.DataFrame(cycle_data),
+                x='capacity', y='cycles',
+                title="容量別年間サイクル数"
+            )
+            # 目標サイクル数の水平線を追加
+            fig_cycles.add_hline(
+                y=st.session_state.sim_annual_cycle_ratio, 
+                line_dash="dash", 
+                line_color="red",
+                annotation_text=f"目標: {st.session_state.sim_annual_cycle_ratio:.2f}サイクル"
+            )
+            st.plotly_chart(fig_cycles, use_container_width=True)
     
     with tab2:
         st.subheader("🌸 季節別分析")
