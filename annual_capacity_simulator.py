@@ -398,12 +398,19 @@ class AnnualBatteryCapacityComparator:
             smoothness_improvement = result.get('smoothness_metrics', {}).get('smoothness_improvement', 0)
             max_jump_improvement = result.get('smoothness_metrics', {}).get('max_jump_improvement', 0)
             
+            # サイクル制約の目標と実績
+            cycle_target = result.get('annual_cycle_target', 0)
+            cycle_actual = result.get('annual_discharge', 0)
+            
             summary.append({
                 '容量(kWh)': f"{capacity:,}",
                 '最大出力(kW)': f"{result['max_power']:.0f}",
                 '年間ピーク削減(kW)': f"{result['annual_peak_reduction']:.1f}",
                 '年間需要幅改善(kW)': f"{result['annual_range_improvement']:.1f}",
                 '年間放電量(MWh)': f"{result['annual_discharge']/1000:.1f}",
+                'サイクル制約目標(MWh)': f"{cycle_target/1000:.1f}",
+                'サイクル制約実績(MWh)': f"{cycle_actual/1000:.1f}",
+                'サイクル目標/実績': f"{cycle_target/1000:.1f}/{cycle_actual/1000:.1f}",
                 '年間サイクル制約': 'OK' if result['annual_cycle_constraint_satisfied'] else 'NG',
                 '春ピーク削減(kW)': f"{result['seasonal_stats']['spring']['peak_reduction']:.1f}",
                 '夏ピーク削減(kW)': f"{result['seasonal_stats']['summer']['peak_reduction']:.1f}",
@@ -849,6 +856,31 @@ def display_annual_results():
     
     if summary_df is not None:
         st.dataframe(summary_df, use_container_width=True)
+        
+        # サイクル制約の詳細説明
+        with st.expander("📋 サイクル制約について", expanded=False):
+            st.write("""
+            **サイクル制約とは:**
+            - バッテリーの年間使用量（放電量）の目標値
+            - 容量 × サイクル比率で計算されます
+            - 実績が目標±許容範囲内であれば「OK」、範囲外であれば「NG」
+            
+            **表示項目:**
+            - **サイクル制約目標**: 設定された年間放電目標値
+            - **サイクル制約実績**: シミュレーション結果の実際の年間放電量
+            - **サイクル目標/実績**: 目標値/実績値の対比表示
+            - **年間サイクル制約**: 制約条件を満たしているかの判定
+            """)
+            
+            # 設定値の表示
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("年間サイクル比率", f"{st.session_state.sim_annual_cycle_ratio:.1f}")
+            with col2:
+                st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f} MWh")
+            with col3:
+                cycle_range_percent = (st.session_state.sim_annual_cycle_tolerance / (capacity_list[0] * st.session_state.sim_annual_cycle_ratio)) * 100
+                st.metric("許容範囲（%）", f"±{cycle_range_percent:.1f}%")
     
     # タブで結果を整理
     tab1, tab2, tab3, tab4 = st.tabs(["年間需要比較", "季節別分析", "月別詳細", "推奨容量"])
