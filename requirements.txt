@@ -2,3 +2,7 @@ streamlit
 plotly
 pandas
 numpy
+optuna
+scikit-learn
+scipy
+matplotlib
