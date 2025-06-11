@@ -429,7 +429,45 @@ def create_annual_time_series(start_date=None):
     return time_series
 
 
+# セッション状態の初期化
+def initialize_session_state():
+    """セッション状態の初期化"""
+    if 'annual_demand' not in st.session_state:
+        st.session_state.annual_demand = None
+    if 'annual_comparison_results' not in st.session_state:
+        st.session_state.annual_comparison_results = None
+    if 'annual_capacity_list' not in st.session_state:
+        st.session_state.annual_capacity_list = []
+    if 'annual_comparator' not in st.session_state:
+        st.session_state.annual_comparator = None
+    if 'show_annual_results' not in st.session_state:
+        st.session_state.show_annual_results = False
+    if 'simulation_stage' not in st.session_state:
+        st.session_state.simulation_stage = 'data_upload'  # 'data_upload', 'simulation_config', 'results'
+    # シミュレーション設定用のセッション状態も初期化
+    if 'sim_capacity_mode' not in st.session_state:
+        st.session_state.sim_capacity_mode = "範囲指定"
+    if 'sim_num_capacities' not in st.session_state:
+        st.session_state.sim_num_capacities = 3
+    if 'sim_min_capacity' not in st.session_state:
+        st.session_state.sim_min_capacity = 20000
+    if 'sim_max_capacity' not in st.session_state:
+        st.session_state.sim_max_capacity = 100000
+    if 'sim_power_scaling_method' not in st.session_state:
+        st.session_state.sim_power_scaling_method = "capacity_ratio"
+    if 'sim_annual_cycle_ratio' not in st.session_state:
+        st.session_state.sim_annual_cycle_ratio = 1.0
+    if 'sim_annual_cycle_tolerance' not in st.session_state:
+        st.session_state.sim_annual_cycle_tolerance = 5000
+    if 'sim_monthly_optimization_trials' not in st.session_state:
+        st.session_state.sim_monthly_optimization_trials = 20
+    if 'sim_use_parallel' not in st.session_state:
+        st.session_state.sim_use_parallel = True
+
+
 def main():
+    initialize_session_state()
+    
     st.title("年間バッテリー容量別シミュレーション比較システム")
     st.write("複数のバッテリー容量での年間需要平準化効果を比較し、最適容量を検討")
     
@@ -437,12 +475,27 @@ def main():
     if not CORE_LOGIC_AVAILABLE:
         st.error("⚠️ コアロジック（battery_core_logic）が利用できません。ダミーデータでの動作となります。")
     
-    # 年間データアップロード
+    # ステージ表示
+    st.subheader(f"現在のステージ: {{'data_upload': '1. データアップロード', 'simulation_config': '2. シミュレーション設定', 'results': '3. 結果表示'}.get(st.session_state.simulation_stage, st.session_state.simulation_stage)}")
+    
+    # ステージ1: 年間データアップロード
+    if st.session_state.simulation_stage == 'data_upload' or st.session_state.annual_demand is None:
+        show_data_upload_section()
+    
+    # ステージ2: シミュレーション設定
+    elif st.session_state.simulation_stage == 'simulation_config':
+        show_simulation_config_section()
+    
+    # ステージ3: 結果表示
+    elif st.session_state.simulation_stage == 'results':
+        display_annual_results()
+
+
+def show_data_upload_section():
+    """データアップロードセクション"""
     st.header("1. 年間需要予測データアップロード")
     
     tab1, tab2 = st.tabs(["CSVアップロード", "サンプルデータ生成"])
-    
-    annual_demand = None
     
     with tab1:
         st.subheader("年間需要予測CSVアップロード")
@@ -475,7 +528,7 @@ def main():
                     time_column = st.selectbox("時刻列を選択", df.columns, index=0)
                     demand_column = st.selectbox("需要データ列を選択", df.columns, index=1)
                     
-                    if st.button("年間データとして読み込み"):
+                    if st.button("年間データとして読み込み", key="upload_csv_data"):
                         try:
                             demand_values = pd.to_numeric(df[demand_column], errors='coerce').values
                             
@@ -484,8 +537,10 @@ def main():
                             st.info(f"アップロードデータ: {len(demand_values):,}ステップ（約{data_days}日分）")
                             
                             # 年間データへの拡張処理は後でvalidate_annual_dataで実行
-                            annual_demand = demand_values
+                            st.session_state.annual_demand = demand_values
+                            st.session_state.simulation_stage = 'simulation_config'
                             st.success("年間需要データとして設定しました")
+                            st.rerun()
                             
                         except Exception as e:
                             st.error(f"データ読み込みエラー: {e}")
@@ -504,14 +559,122 @@ def main():
         col1, col2 = st.columns(2)
         
         with col1:
-            base_demand = st.number_input("ベース需要 (kW)", value=5000, min_value=1000, max_value=20000, step=500)
-            seasonal_variation = st.slider("季節変動 (%)", min_value=10, max_value=50, value=20, step=5)
+            base_demand = st.number_input("ベース需要 (kW)", value=5000, min_value=1000, max_value=20000, step=500, key="sample_base_demand")
+            seasonal_variation = st.slider("季節変動 (%)", min_value=10, max_value=50, value=20, step=5, key="sample_seasonal")
         
         with col2:
-            daily_variation = st.slider("日内変動 (%)", min_value=10, max_value=50, value=30, step=5)
-            noise_level = st.slider("ランダムノイズ (%)", min_value=1, max_value=10, value=5, step=1)
+        if st.button("📅 月別詳細CSV", use_container_width=True, key="download_monthly_csv"):
+            try:
+                monthly_detail_data = []
+                
+                for capacity, result in results.items():
+                    if 'monthly_results' in result:
+                        for month, monthly_result in result['monthly_results'].items():
+                            monthly_detail_data.append({
+                                '容量(kWh)': capacity,
+                                '月': month,
+                                'ピーク削減(kW)': monthly_result['peak_reduction'],
+                                '需要幅改善(kW)': monthly_result['range_improvement'],
+                                '月間放電(kWh)': monthly_result['monthly_discharge'],
+                                'ピーク制御比率': monthly_result['optimized_params'].get('peak_power_ratio', 1.0),
+                                'ボトム制御比率': monthly_result['optimized_params'].get('bottom_power_ratio', 1.0)
+                            })
+                
+                monthly_detail_df = pd.DataFrame(monthly_detail_data)
+                monthly_csv = monthly_detail_df.to_csv(index=False)
+                
+                st.download_button(
+                    label="月別詳細をダウンロード",
+                    data=monthly_csv,
+                    file_name=f"annual_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_monthly_detail_csv"
+                )
+            except Exception as e:
+                st.error(f"月別詳細CSV生成エラー: {e}")
+    
+    with col3:
+        if st.button("🌍 季節別統計CSV", use_container_width=True, key="download_seasonal_csv"):
+            try:
+                seasonal_detail_data = []
+                seasons = ['spring', 'summer', 'autumn', 'winter']
+                season_names = ['春', '夏', '秋', '冬']
+                
+                for capacity, result in results.items():
+                    for season, season_name in zip(seasons, season_names):
+                        seasonal_detail_data.append({
+                            '容量(kWh)': capacity,
+                            '季節': season_name,
+                            'ピーク削減(kW)': result['seasonal_stats'][season]['peak_reduction'],
+                            '平均削減(kW)': result['seasonal_stats'][season]['average_reduction'],
+                            '放電量(kWh)': result['seasonal_stats'][season]['total_discharge']
+                        })
+                
+                seasonal_detail_df = pd.DataFrame(seasonal_detail_data)
+                seasonal_csv = seasonal_detail_df.to_csv(index=False)
+                
+                st.download_button(
+                    label="季節別統計をダウンロード",
+                    data=seasonal_csv,
+                    file_name=f"annual_seasonal_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_seasonal_detail_csv"
+                )
+            except Exception as e:
+                st.error(f"季節別CSV生成エラー: {e}")
+
+
+# デバッグ機能
+def debug_annual_test():
+    """年間データ用デバッグ機能"""
+    st.sidebar.header("🔧 年間デバッグモード")
+    
+    if st.sidebar.button("年間テストデータ生成", key="debug_generate_data"):
+        with st.sidebar:
+            with st.spinner("年間テストデータ生成中..."):
+                # 簡易年間データ生成
+                np.random.seed(42)
+                base_demand = 5000
+                
+                annual_test_data = []
+                for day in range(365):
+                    # 季節変動
+                    seasonal_factor = 1 + 0.2 * np.sin(2 * np.pi * day / 365 - np.pi/2)
+                    
+                    # 日内パターン
+                    daily_pattern = []
+                    for hour in range(24):
+                        for quarter in range(4):
+                            time_factor = 1 + 0.3 * np.sin(2 * np.pi * (hour + quarter/4) / 24 - np.pi/3)
+                            noise = np.random.normal(0, 0.05)
+                            demand = base_demand * seasonal_factor * time_factor * (1 + noise)
+                            daily_pattern.append(max(demand, base_demand * 0.5))
+                    
+                    annual_test_data.extend(daily_pattern)
+                
+                st.session_state.annual_test_demand = np.array(annual_test_data)
+                st.sidebar.success(f"年間テストデータ生成完了: {len(annual_test_data):,}ステップ")
+    
+    if hasattr(st.session_state, 'annual_test_demand'):
+        if st.sidebar.button("テストデータを年間データに適用", key="debug_apply_data"):
+            st.session_state.annual_demand = st.session_state.annual_test_demand
+            st.session_state.simulation_stage = 'simulation_config'
+            st.sidebar.success("年間テストデータを適用しました")
+            st.rerun()
+
+
+if __name__ == "__main__":
+    # デバッグモードの表示
+    if st.sidebar.checkbox("🔧 年間デバッグモード", value=False, key="debug_mode_checkbox"):
+        debug_annual_test()
+    
+    main()
+            daily_variation = st.slider("日内変動 (%)", min_value=10, max_value=50, value=30, step=5, key="sample_daily")
+            noise_level = st.slider("ランダムノイズ (%)", min_value=1, max_value=10, value=5, step=1, key="sample_noise")
         
-        if st.button("サンプル年間データ生成"):
+        if st.button("サンプル年間データ生成", key="generate_sample_data"):
             with st.spinner("年間データ生成中..."):
                 # 年間サンプルデータ生成
                 np.random.seed(42)
@@ -540,224 +703,271 @@ def main():
                     daily_demand = np.maximum(daily_demand, base_demand * 0.3)
                     annual_demand_sample.extend(daily_demand)
                 
-                annual_demand = np.array(annual_demand_sample)
+                st.session_state.annual_demand = np.array(annual_demand_sample)
+                st.session_state.simulation_stage = 'simulation_config'
                 
-                st.success(f"年間サンプルデータ生成完了: {len(annual_demand):,}ステップ")
+                st.success(f"年間サンプルデータ生成完了: {len(annual_demand_sample):,}ステップ")
                 
                 # 統計表示
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("最小需要", f"{annual_demand.min():.0f} kW")
+                    st.metric("最小需要", f"{st.session_state.annual_demand.min():.0f} kW")
                 with col2:
-                    st.metric("平均需要", f"{annual_demand.mean():.0f} kW")
+                    st.metric("平均需要", f"{st.session_state.annual_demand.mean():.0f} kW")
                 with col3:
-                    st.metric("最大需要", f"{annual_demand.max():.0f} kW")
+                    st.metric("最大需要", f"{st.session_state.annual_demand.max():.0f} kW")
                 with col4:
-                    st.metric("需要幅", f"{annual_demand.max() - annual_demand.min():.0f} kW")
+                    st.metric("需要幅", f"{st.session_state.annual_demand.max() - st.session_state.annual_demand.min():.0f} kW")
+                
+                st.rerun()
+
+
+def show_simulation_config_section():
+    """シミュレーション設定セクション"""
+    st.header("2. 年間容量別シミュレーション設定")
     
-    # 年間シミュレーション実行
-    if annual_demand is not None:
-        st.header("2. 年間容量別シミュレーション設定")
+    # データ確認表示
+    if st.session_state.annual_demand is not None:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("データ長", f"{len(st.session_state.annual_demand):,}ステップ")
+        with col2:
+            st.metric("平均需要", f"{st.session_state.annual_demand.mean():.0f}kW")
+        with col3:
+            st.metric("最大需要", f"{st.session_state.annual_demand.max():.0f}kW")
+        with col4:
+            st.metric("需要幅", f"{st.session_state.annual_demand.max() - st.session_state.annual_demand.min():.0f}kW")
+    
+    # データ再設定ボタン
+    if st.button("📝 データを再設定", key="reset_data"):
+        st.session_state.simulation_stage = 'data_upload'
+        st.session_state.annual_demand = None
+        st.rerun()
+    
+    with st.expander("年間シミュレーション設定", expanded=True):
         
-        with st.expander("年間シミュレーション設定", expanded=True):
-            
-            # 容量設定（簡略化）
-            st.subheader("比較容量設定")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                capacity_mode = st.selectbox(
-                    "容量設定方式",
-                    ["範囲指定", "個別指定"],
-                    help="範囲指定：等間隔で複数容量を自動設定、個別指定：手動で各容量を設定"
-                )
-            
-            capacity_list = []
-            
-            if capacity_mode == "範囲指定":
-                with col2:
-                    num_capacities = st.selectbox("比較容量数", [3, 4, 5], index=0)
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    min_capacity = st.number_input("最小容量 (kWh)", value=20000, min_value=10000, max_value=500000, step=10000)
-                with col2:
-                    max_capacity = st.number_input("最大容量 (kWh)", value=100000, min_value=min_capacity, max_value=500000, step=10000)
-                with col3:
-                    if num_capacities > 1:
-                        step_size = (max_capacity - min_capacity) / (num_capacities - 1)
-                        capacity_list = [int(min_capacity + i * step_size) for i in range(num_capacities)]
-                        st.info(f"生成容量:\n" + "\n".join([f"{cap:,}kWh" for cap in capacity_list]))
-                    else:
-                        capacity_list = [min_capacity]
-            
-            else:  # 個別指定
-                with col2:
-                    num_capacities = st.selectbox("比較容量数", [2, 3, 4], index=1)
-                
-                cols = st.columns(4)
-                
-                for i in range(num_capacities):
-                    with cols[i]:
-                        capacity = st.number_input(
-                            f"容量{i+1} (kWh)", 
-                            value=[30000, 60000, 120000, 200000][i],
-                            min_value=10000, max_value=500000, step=10000,
-                            key=f"manual_capacity_{i}"
-                        )
-                        capacity_list.append(capacity)
-                
-                # 未使用の列は空白
-                for i in range(num_capacities, 4):
-                    with cols[i]:
-                        st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True)
-            
-            # 重複チェック
-            if len(set(capacity_list)) != len(capacity_list):
-                st.warning("⚠️ 重複する容量があります。異なる容量を設定してください。")
-            else:
-                st.success(f"✅ 選択容量: {', '.join([f'{cap:,}kWh' for cap in capacity_list])}")
-            
-            # 最大出力設定
-            st.subheader("最大出力設定")
-            power_scaling_method = st.selectbox(
-                "最大出力決定方法",
-                ["capacity_ratio", "fixed", "custom"],
-                format_func=lambda x: {
-                    "capacity_ratio": "容量比例（容量÷16）",
-                    "fixed": "固定値（3000kW）",
-                    "custom": "カスタム比率（容量÷20）"
-                }[x]
+        # 容量設定（簡略化）
+        st.subheader("比較容量設定")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.session_state.sim_capacity_mode = st.selectbox(
+                "容量設定方式",
+                ["範囲指定", "個別指定"],
+                index=0 if st.session_state.sim_capacity_mode == "範囲指定" else 1,
+                help="範囲指定：等間隔で複数容量を自動設定、個別指定：手動で各容量を設定",
+                key="capacity_mode_select"
             )
-            
-            # 年間最適化設定
-            st.subheader("年間最適化設定")
+        
+        capacity_list = []
+        
+        if st.session_state.sim_capacity_mode == "範囲指定":
+            with col2:
+                st.session_state.sim_num_capacities = st.selectbox(
+                    "比較容量数", 
+                    [3, 4, 5], 
+                    index=[3, 4, 5].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [3, 4, 5] else 0,
+                    key="num_capacities_select"
+                )
             
             col1, col2, col3 = st.columns(3)
-            
             with col1:
-                annual_cycle_ratio = st.slider(
-                    "年間サイクル比率", 
-                    min_value=0.5, max_value=3.0, value=1.0, step=0.1,
-                    help="容量に対する年間サイクル目標の比率"
+                st.session_state.sim_min_capacity = st.number_input(
+                    "最小容量 (kWh)", 
+                    value=st.session_state.sim_min_capacity, 
+                    min_value=10000, max_value=500000, step=10000,
+                    key="min_capacity_input"
                 )
-                
             with col2:
-                annual_cycle_tolerance = st.number_input(
-                    "年間サイクル許容範囲 (kWh)", 
-                    value=5000, min_value=1000, max_value=50000, step=1000,
-                    help="年間サイクル制約の許容範囲"
+                st.session_state.sim_max_capacity = st.number_input(
+                    "最大容量 (kWh)", 
+                    value=max(st.session_state.sim_max_capacity, st.session_state.sim_min_capacity), 
+                    min_value=st.session_state.sim_min_capacity, max_value=500000, step=10000,
+                    key="max_capacity_input"
                 )
-            
             with col3:
-                monthly_optimization_trials = st.slider(
-                    "月別最適化試行回数",
-                    min_value=10, max_value=50, value=20, step=5,
-                    help="各月の最適化試行回数（少なくすると高速化）"
-                )
-            
-            # 処理方式設定
-            st.subheader("処理設定")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                use_parallel = st.checkbox(
-                    "並列処理を使用", 
-                    value=True,
-                    help="月別処理を並列実行（高速化、但しメモリ使用量増加）"
-                )
-            
-            with col2:
-                # 予想計算時間
-                estimated_time = len(capacity_list) * 12 * monthly_optimization_trials * (0.5 if use_parallel else 2)
-                st.info(f"""
-                **予想処理時間:**
-                - 容量数: {len(capacity_list)}
-                - 月数: 12ヶ月
-                - 並列処理: {'有効' if use_parallel else '無効'}
-                
-                約 {estimated_time/60:.1f}分 〜 {estimated_time/30:.1f}分
-                """)
-        
-        # 年間シミュレーション実行ボタン
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("🚀 年間シミュレーション実行", use_container_width=True):
-                
-                if len(set(capacity_list)) != len(capacity_list):
-                    st.error("重複する容量があります。設定を確認してください。")
+                if st.session_state.sim_num_capacities > 1:
+                    step_size = (st.session_state.sim_max_capacity - st.session_state.sim_min_capacity) / (st.session_state.sim_num_capacities - 1)
+                    capacity_list = [int(st.session_state.sim_min_capacity + i * step_size) for i in range(st.session_state.sim_num_capacities)]
+                    st.info(f"生成容量:\n" + "\n".join([f"{cap:,}kWh" for cap in capacity_list]))
                 else:
-                    # プログレスバーと状態表示
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    time_text = st.empty()
-                    
-                    start_time = time.time()
-                    
-                    try:
-                        status_text.text("年間シミュレーションシステム初期化中...")
-                        progress_bar.progress(5)
-                        
-                        annual_comparator = AnnualBatteryCapacityComparator()
-                        
-                        status_text.text("年間需要データ検証・準備中...")
-                        progress_bar.progress(10)
-                        
-                        # 年間シミュレーション実行
-                        status_text.text("年間容量別最適化実行中...")
-                        time_text.text(f"経過時間: {time.time() - start_time:.0f}秒")
-                        
-                        annual_results = annual_comparator.run_annual_capacity_comparison(
-                            annual_demand=annual_demand,
-                            capacity_list=capacity_list,
-                            cycle_target_ratio=annual_cycle_ratio,
-                            cycle_tolerance=annual_cycle_tolerance,
-                            optimization_trials=monthly_optimization_trials,
-                            power_scaling_method=power_scaling_method,
-                            use_parallel=use_parallel
-                        )
-                        
-                        progress_bar.progress(95)
-                        status_text.text("結果分析中...")
-                        
-                        if annual_results:
-                            # セッション状態に保存
-                            st.session_state.annual_comparison_results = annual_results
-                            st.session_state.annual_capacity_list = capacity_list
-                            st.session_state.annual_demand = annual_demand
-                            st.session_state.annual_comparator = annual_comparator
-                            
-                            progress_bar.progress(100)
-                            elapsed_time = time.time() - start_time
-                            status_text.text(f"年間シミュレーション完了！（処理時間: {elapsed_time/60:.1f}分）")
-                            time_text.empty()
-                            
-                            st.success(f"🎉 {len(annual_results)}種類の容量で年間シミュレーションが完了しました！")
-                            
-                            st.session_state.show_annual_results = True
-                            
-                            time.sleep(2)
-                            st.rerun()
-                        
-                        else:
-                            st.error("年間シミュレーションで有効な結果が得られませんでした。")
-                    
-                    except Exception as e:
-                        st.error(f"年間シミュレーションエラー: {e}")
-                        import traceback
-                        st.text(traceback.format_exc())
-                    
-                    finally:
-                        progress_bar.empty()
-                        status_text.empty()
-                        time_text.empty()
-    
-    # 年間結果表示
-    if (hasattr(st.session_state, 'show_annual_results') and st.session_state.show_annual_results 
-        and hasattr(st.session_state, 'annual_comparison_results')):
+                    capacity_list = [st.session_state.sim_min_capacity]
         
-        display_annual_results()
+        else:  # 個別指定
+            with col2:
+                st.session_state.sim_num_capacities = st.selectbox(
+                    "比較容量数", 
+                    [2, 3, 4], 
+                    index=[2, 3, 4].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [2, 3, 4] else 1,
+                    key="num_capacities_manual_select"
+                )
+            
+            cols = st.columns(4)
+            
+            # セッション状態で個別容量を保存
+            if 'sim_individual_capacities' not in st.session_state:
+                st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000]
+            
+            for i in range(st.session_state.sim_num_capacities):
+                with cols[i]:
+                    st.session_state.sim_individual_capacities[i] = st.number_input(
+                        f"容量{i+1} (kWh)", 
+                        value=st.session_state.sim_individual_capacities[i],
+                        min_value=10000, max_value=500000, step=10000,
+                        key=f"manual_capacity_{i}_input"
+                    )
+                    capacity_list.append(st.session_state.sim_individual_capacities[i])
+            
+            # 未使用の列は空白
+            for i in range(st.session_state.sim_num_capacities, 4):
+                with cols[i]:
+                    st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True, key=f"unused_capacity_{i}")
+        
+        # 重複チェック
+        if len(set(capacity_list)) != len(capacity_list):
+            st.warning("⚠️ 重複する容量があります。異なる容量を設定してください。")
+        else:
+            st.success(f"✅ 選択容量: {', '.join([f'{cap:,}kWh' for cap in capacity_list])}")
+        
+        # 最大出力設定
+        st.subheader("最大出力設定")
+        st.session_state.sim_power_scaling_method = st.selectbox(
+            "最大出力決定方法",
+            ["capacity_ratio", "fixed", "custom"],
+            index=["capacity_ratio", "fixed", "custom"].index(st.session_state.sim_power_scaling_method),
+            format_func=lambda x: {
+                "capacity_ratio": "容量比例（容量÷16）",
+                "fixed": "固定値（3000kW）",
+                "custom": "カスタム比率（容量÷20）"
+            }[x],
+            key="power_scaling_select"
+        )
+        
+        # 年間最適化設定
+        st.subheader("年間最適化設定")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.session_state.sim_annual_cycle_ratio = st.slider(
+                "年間サイクル比率", 
+                min_value=0.5, max_value=3.0, value=st.session_state.sim_annual_cycle_ratio, step=0.1,
+                help="容量に対する年間サイクル目標の比率",
+                key="annual_cycle_ratio_slider"
+            )
+            
+        with col2:
+            st.session_state.sim_annual_cycle_tolerance = st.number_input(
+                "年間サイクル許容範囲 (kWh)", 
+                value=st.session_state.sim_annual_cycle_tolerance, 
+                min_value=1000, max_value=50000, step=1000,
+                help="年間サイクル制約の許容範囲",
+                key="annual_cycle_tolerance_input"
+            )
+        
+        with col3:
+            st.session_state.sim_monthly_optimization_trials = st.slider(
+                "月別最適化試行回数",
+                min_value=10, max_value=50, value=st.session_state.sim_monthly_optimization_trials, step=5,
+                help="各月の最適化試行回数（少なくすると高速化）",
+                key="monthly_optimization_trials_slider"
+            )
+        
+        # 処理方式設定
+        st.subheader("処理設定")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.session_state.sim_use_parallel = st.checkbox(
+                "並列処理を使用", 
+                value=st.session_state.sim_use_parallel,
+                help="月別処理を並列実行（高速化、但しメモリ使用量増加）",
+                key="use_parallel_checkbox"
+            )
+        
+        with col2:
+            # 予想計算時間
+            estimated_time = len(capacity_list) * 12 * st.session_state.sim_monthly_optimization_trials * (0.5 if st.session_state.sim_use_parallel else 2)
+            st.info(f"""
+            **予想処理時間:**
+            - 容量数: {len(capacity_list)}
+            - 月数: 12ヶ月
+            - 並列処理: {'有効' if st.session_state.sim_use_parallel else '無効'}
+            
+            約 {estimated_time/60:.1f}分 〜 {estimated_time/30:.1f}分
+            """)
+    
+    # 年間シミュレーション実行ボタン
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 年間シミュレーション実行", use_container_width=True, key="run_simulation_button"):
+            
+            if len(set(capacity_list)) != len(capacity_list):
+                st.error("重複する容量があります。設定を確認してください。")
+            else:
+                # プログレスバーと状態表示
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                time_text = st.empty()
+                
+                start_time = time.time()
+                
+                try:
+                    status_text.text("年間シミュレーションシステム初期化中...")
+                    progress_bar.progress(5)
+                    
+                    annual_comparator = AnnualBatteryCapacityComparator()
+                    
+                    status_text.text("年間需要データ検証・準備中...")
+                    progress_bar.progress(10)
+                    
+                    # 年間シミュレーション実行
+                    status_text.text("年間容量別最適化実行中...")
+                    time_text.text(f"経過時間: {time.time() - start_time:.0f}秒")
+                    
+                    annual_results = annual_comparator.run_annual_capacity_comparison(
+                        annual_demand=st.session_state.annual_demand,
+                        capacity_list=capacity_list,
+                        cycle_target_ratio=st.session_state.sim_annual_cycle_ratio,
+                        cycle_tolerance=st.session_state.sim_annual_cycle_tolerance,
+                        optimization_trials=st.session_state.sim_monthly_optimization_trials,
+                        power_scaling_method=st.session_state.sim_power_scaling_method,
+                        use_parallel=st.session_state.sim_use_parallel
+                    )
+                    
+                    progress_bar.progress(95)
+                    status_text.text("結果分析中...")
+                    
+                    if annual_results:
+                        # セッション状態に保存
+                        st.session_state.annual_comparison_results = annual_results
+                        st.session_state.annual_capacity_list = capacity_list
+                        st.session_state.annual_comparator = annual_comparator
+                        st.session_state.simulation_stage = 'results'
+                        
+                        progress_bar.progress(100)
+                        elapsed_time = time.time() - start_time
+                        status_text.text(f"年間シミュレーション完了！（処理時間: {elapsed_time/60:.1f}分）")
+                        time_text.empty()
+                        
+                        st.success(f"🎉 {len(annual_results)}種類の容量で年間シミュレーションが完了しました！")
+                        
+                        time.sleep(2)
+                        st.rerun()
+                    
+                    else:
+                        st.error("年間シミュレーションで有効な結果が得られませんでした。")
+                
+                except Exception as e:
+                    st.error(f"年間シミュレーションエラー: {e}")
+                    import traceback
+                    st.text(traceback.format_exc())
+                
+                finally:
+                    progress_bar.empty()
+                    status_text.empty()
+                    time_text.empty()
 
 
 def display_annual_results():
@@ -768,6 +978,15 @@ def display_annual_results():
     annual_comparator = st.session_state.annual_comparator
     
     st.header("3. 年間シミュレーション結果")
+    
+    # 設定変更ボタン
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write("結果が表示されています。設定を変更して再実行することも可能です。")
+    with col2:
+        if st.button("⚙️ 設定変更", key="change_settings"):
+            st.session_state.simulation_stage = 'simulation_config'
+            st.rerun()
     
     # サマリーテーブル
     st.subheader("📊 年間効果サマリー")
@@ -928,7 +1147,8 @@ def display_annual_results():
         selected_capacity = st.selectbox(
             "詳細表示する容量を選択",
             capacity_list,
-            format_func=lambda x: f"{x:,}kWh"
+            format_func=lambda x: f"{x:,}kWh",
+            key="monthly_detail_capacity_select"
         )
         
         if selected_capacity in results and 'monthly_results' in results[selected_capacity]:
@@ -1101,7 +1321,8 @@ def display_annual_results():
                     data=summary_csv,
                     file_name=f"annual_capacity_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="download_summary_csv"
                 )
             except Exception as e:
                 st.error(f"サマリーCSV生成エラー: {e}")
