@@ -1,0 +1,84 @@
+# requirements.txt
+streamlit>=1.28.0
+pandas>=1.5.0
+numpy>=1.24.0
+plotly>=5.15.0
+openpyxl>=3.1.0
+python-dateutil>=2.8.0
+
+# .streamlit/config.toml
+[theme]
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+
+[server]
+maxUploadSize = 200
+maxMessageSize = 200
+
+[browser]
+gatherUsageStats = false
+
+# README.md
+# バッテリー容量別シミュレーション比較システム
+
+複数のバッテリー容量で需要平準化効果を比較し、最適容量を検討するためのWebアプリケーションです。
+
+## 機能
+- 需要予測データのCSVアップロード
+- 複数容量での自動最適化シミュレーション
+- 容量別効果比較とグラフ表示
+- 結果のCSVダウンロード
+
+## 使用方法
+1. 需要予測データ（96ステップ、15分間隔）をCSVでアップロード
+2. 比較したい容量を設定
+3. シミュレーション実行
+4. 結果を確認・ダウンロード
+
+## 技術スタック
+- Streamlit
+- Pandas, NumPy
+- Plotly
+- Python 3.9+
+
+## ローカル実行
+```bash
+pip install -r requirements.txt
+streamlit run battery_capacity_app.py
+```
+
+# .gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data files
+*.csv
+*.xlsx
+!sample_data.csv
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
