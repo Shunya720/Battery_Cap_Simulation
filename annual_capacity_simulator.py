@@ -564,7 +564,7 @@ def show_data_upload_section():
     """データアップロードセクション"""
     st.header("1. 年間需要予測データアップロード")
     
-    tab1, tab2 = st.tabs(["CSVアップロード", "サンプルデータ生成"])
+    tab1　= st.tabs(["CSVアップロード"])
     
     with tab1:
         st.subheader("年間需要予測CSVアップロード")
@@ -621,53 +621,6 @@ def show_data_upload_section():
                 st.error(f"ファイル読み込みエラー: {e}")
                 import traceback
                 st.text(traceback.format_exc())
-    
-    with tab2:
-        st.subheader("サンプル年間データ生成")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            base_demand = st.number_input("ベース需要 (kW)", value=5000, min_value=1000, max_value=20000, step=500, key="sample_base_demand")
-            seasonal_variation = st.slider("季節変動 (%)", min_value=10, max_value=50, value=20, step=5, key="sample_seasonal")
-        
-        with col2:
-            daily_variation = st.slider("日内変動 (%)", min_value=10, max_value=50, value=30, step=5, key="sample_daily")
-            noise_level = st.slider("ランダムノイズ (%)", min_value=1, max_value=10, value=5, step=1, key="sample_noise")
-        
-        if st.button("サンプル年間データ生成", key="generate_sample_data"):
-            with st.spinner("年間データ生成中..."):
-                # 年間サンプルデータ生成
-                np.random.seed(42)
-                
-                # 基本パターン
-                time_of_year = np.linspace(0, 2*np.pi, 365)
-                seasonal_pattern = np.sin(time_of_year - np.pi/2) * (seasonal_variation/100)  # 夏がピーク
-                
-                annual_demand_sample = []
-                
-                for day in range(365):
-                    # 日内パターン（2つのピーク：朝、夕方）
-                    time_of_day = np.linspace(0, 2*np.pi, 96)
-                    daily_pattern = (
-                        np.sin(time_of_day - np.pi/3) * 0.3 +  # 夕方ピーク
-                        np.sin(time_of_day * 2 - np.pi/6) * 0.2  # 朝ピーク
-                    ) * (daily_variation/100)
-                    
-                    # 季節×日内の組み合わせ
-                    daily_demand = base_demand * (
-                        1 + seasonal_pattern[day] + daily_pattern + 
-                        np.random.normal(0, noise_level/100, 96)
-                    )
-                    
-                    # 最小値制限
-                    daily_demand = np.maximum(daily_demand, base_demand * 0.3)
-                    annual_demand_sample.extend(daily_demand)
-                
-                st.session_state.annual_demand = np.array(annual_demand_sample)
-                st.session_state.simulation_stage = 'simulation_config'
-                
-                st.success(f"年間サンプルデータ生成完了: {len(annual_demand_sample):,}ステップ")
                 
                 # 統計表示
                 col1, col2, col3, col4 = st.columns(4)
