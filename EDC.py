@@ -453,7 +453,10 @@ class UnitCommitmentSolver:
                 'actions': []
             }
             
-                
+            # === 最小台数構成決定ロジック ===
+            margin_dg, margin_gt = self.get_time_based_margin(i)
+            current_margin = max(margin_dg, margin_gt)
+            
             # 現在および将来需要での最小構成を計算
             _, current_required, current_analysis = self.calculate_minimum_units_required(
                 demand, sorted_generators, current_margin
@@ -525,7 +528,9 @@ class UnitCommitmentSolver:
                     # GT急激需要上昇対応
                     if i >= 1 and gen.unit_type == "GT":
                         prev_demand = self.demand_data[i - 1]
-                        if (demand - prev_demand) > 3000 and current_selected_capacity < demand * (1 + current_margin):
+                        margin_dg_check, margin_gt_check = self.get_time_based_margin(i)
+                        margin_check = max(margin_dg_check, margin_gt_check)
+                        if (demand - prev_demand) > 3000 and current_selected_capacity < demand * (1 + margin_check):
                             should_start = True
                             start_reason = "GT急激需要上昇対応"
                     
