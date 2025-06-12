@@ -1649,8 +1649,43 @@ def show_soc_analysis(results, capacity_list):
         with col5:
             st.metric("平均SOC", f"{soc_stats.get('soc_average', 50):.1f}%")
         
-        # 年間SOC推移グラフ
-        st.subheader("SOC統計比較")
+# 年間SOC推移グラフ
+        # SOCプロファイルのサンプリング（表示用）
+        soc_profile = result.get('soc_profile', [])
+        if len(soc_profile) > 0:
+            sample_size = min(len(soc_profile), 8760)
+            sample_indices = np.linspace(0, len(soc_profile)-1, sample_size, dtype=int)
+            
+            time_series = create_annual_time_series()
+            sample_times = [time_series[i] for i in sample_indices]
+            sample_soc = soc_profile[sample_indices]
+            
+            fig_soc = go.Figure()
+            
+            fig_soc.add_trace(go.Scatter(
+                x=sample_times,
+                y=sample_soc,
+                name=f"SOC推移（{selected_capacity_soc:,}kWh）",
+                line=dict(color="green", width=2)
+            ))
+            
+            # SOC限界値の表示
+            fig_soc.add_hline(y=90, line_dash="dash", line_color="red", annotation_text="SOC上限(90%)")
+            fig_soc.add_hline(y=10, line_dash="dash", line_color="red", annotation_text="SOC下限(10%)")
+            fig_soc.add_hline(y=50, line_dash="dot", line_color="gray", annotation_text="SOC中央(50%)")
+            
+            fig_soc.update_layout(
+                title=f"年間SOC推移 - 容量{selected_capacity_soc:,}kWh（SOC引き継ぎあり）",
+                xaxis_title="日時",
+                yaxis_title="SOC (%)",
+                yaxis=dict(range=[0, 100]),
+                height=500
+            )
+            
+            st.plotly_chart(fig_soc, use_container_width=True)
+
+    # SOC統計比較
+    st.subheader("SOC統計比較")
     
     col1, col2 = st.columns(2)
     
