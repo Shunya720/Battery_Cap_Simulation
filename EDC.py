@@ -71,7 +71,7 @@ class EconomicDispatchSolver:
         self.max_iterations = 50
     
     def calculate_output_from_lambda(self, generator: GeneratorConfig, lambda_val: float) -> float:
-        """λ値から発電機出力を計算"""
+        """λ値から発電機出力を計算（最小出力制約を厳密に適用）"""
         # λ式: dC/dP = λ より、2*a*P + b = λ/u なので P = (λ/u - b) / (2*a)
         # ここでλ/uは単位変換後のλ値
         lambda_per_fuel = lambda_val / generator.fuel_price * 1000  # 単位調整
@@ -79,18 +79,23 @@ class EconomicDispatchSolver:
         if generator.heat_rate_a == 0:
             # 2次係数が0の場合は線形
             if generator.heat_rate_b == 0:
-                return generator.min_output
-            output = lambda_per_fuel / generator.heat_rate_b
+                output = generator.min_output
+            else:
+                output = lambda_per_fuel / generator.heat_rate_b
         else:
             output = (lambda_per_fuel - generator.heat_rate_b) / (2 * generator.heat_rate_a)
         
-        # 上下限制約
-        output = max(generator.min_output, min(generator.max_output, output))
+        # 上下限制約の厳密な適用
+        if output < generator.min_output:
+            output = generator.min_output
+        elif output > generator.max_output:
+            output = generator.max_output
+        
         return output
     
     def calculate_total_power(self, generators: List[GeneratorConfig], lambda_val: float, 
                             status_flags: np.ndarray) -> float:
-        """λ値から総出力を計算"""
+        """λ値から総出力を計算（運転中発電機のみ最小出力以上を保証）"""
         total_power = 0.0
         
         for i, gen in enumerate(generators):
@@ -100,6 +105,9 @@ class EconomicDispatchSolver:
                 output = 0.0
             elif status == 1:  # 運転中
                 output = self.calculate_output_from_lambda(gen, lambda_val)
+                # 運転中は必ず最小出力以上であることを保証
+                if output < gen.min_output:
+                    output = gen.min_output
             else:
                 output = 0.0
             
@@ -107,9 +115,172 @@ class EconomicDispatchSolver:
         
         return total_power
     
+    def solve_economic_dispatch(self, generators: List[GeneratorConfig], 
+                              demand_data: np.ndarray, output_flags: np.ndarray) -> Dict:
+        """経済配分計算（最小出力制約を厳密に適用）"""
+        time_steps = len(demand_data)
+        gen_count = len(generators)
+        
+        # λ値と出力の保存配列
+        lambda_values = np.zeros(time_steps)
+        power_outputs = np.zeros((gen_count, time_steps))
+        
+        # 各時刻での計算
+        for t in range(time_steps):
+            demand = demand_data[t]
+            status_flags = output_flags[:, t]
+            
+            # 運転中発電機の最小出力合計をチェック
+            running_generators = []
+            min_total_output = 0.0
+            max_total_output = 0.0
+            
+            for i, gen in enumerate(generators):
+                if status_flags[i] == 1:  # 運転中
+                    running_generators.append((i, gen))
+                    min_total_output += gen.min_output
+                    max_total_output += gen.max_output
+            
+            # 需要が最小出力合計を下回る場合の処理
+            if demand < min_total_output:
+                # 最小出力で運転し、余剰分は比例配分で削減
+                total_excess = min_total_output - demand
+                
+                for i, gen in running_generators:
+                    base_output = gen.min_output
+                    # 余剰削減可能量（最小出力は維持）
+                    reduction_capacity = gen.max_output - gen.min_output
+                    total_reduction_capacity = sum(g.max_output - g.min_output for _, g in running_generators)
+                    
+                    if total_reduction_capacity > 0:
+                        # 比例配分で余剰を削減（ただし最小出力は維持）
+                        reduction_ratio = min(1.0, total_excess / total_reduction_capacity)
+                        actual_reduction = reduction_capacity * reduction_ratio
+                        power_outputs[i, t] = base_output - min(actual_reduction, base_output - gen.min_output)
+                    else:
+                        power_outputs[i, t] = base_output
+                
+                # この場合のλ値は最も効率の良い発電機の限界費用
+                if running_generators:
+                    best_gen = min(running_generators, key=lambda x: x[1].heat_rate_b)[1]
+                    lambda_values[t] = (2 * best_gen.heat_rate_a * best_gen.min_output + best_gen.heat_rate_b) * best_gen.fuel_price / 1000
+                else:
+                    lambda_values[t] = 0.0
+                
+            # 需要が最大出力合計を上回る場合の処理
+            elif demand > max_total_output:
+                # 全発電機を最大出力で運転
+                for i, gen in running_generators:
+                    power_outputs[i, t] = gen.max_output
+                
+                # この場合のλ値は最も非効率な発電機の限界費用
+                if running_generators:
+                    worst_gen = max(running_generators, key=lambda x: x[1].heat_rate_b)[1]
+                    lambda_values[t] = (2 * worst_gen.heat_rate_a * worst_gen.max_output + worst_gen.heat_rate_b) * worst_gen.fuel_price / 1000
+                else:
+                    lambda_values[t] = 0.0
+                
+            else:
+                # 通常の経済配分計算
+                lambda_val = self.find_lambda_binary_search(generators, demand, status_flags)
+                lambda_values[t] = lambda_val
+                
+                # 各発電機の出力計算（最小出力制約適用）
+                total_calculated = 0.0
+                for i, gen in enumerate(generators):
+                    status = status_flags[i]
+                    
+                    if status == 0 or status == 2:  # 停止中または起動中
+                        power_outputs[i, t] = 0.0
+                    elif status == 1:  # 運転中
+                        calculated_output = self.calculate_output_from_lambda(gen, lambda_val)
+                        # 最小出力制約の厳密適用
+                        power_outputs[i, t] = max(calculated_output, gen.min_output)
+                        total_calculated += power_outputs[i, t]
+                
+                # 需給バランス調整（最小出力制約を維持しながら）
+                if abs(total_calculated - demand) > self.lambda_tolerance:
+                    self._adjust_outputs_with_constraints(generators, power_outputs[:, t], 
+                                                        status_flags, demand, t)
+        
+        return {
+            'lambda_values': lambda_values,
+            'power_outputs': power_outputs,
+            'total_costs': self.calculate_fuel_costs(generators, power_outputs, output_flags)
+        }
+    
+    def _adjust_outputs_with_constraints(self, generators: List[GeneratorConfig], 
+                                       outputs: np.ndarray, status_flags: np.ndarray, 
+                                       demand: float, time_step: int):
+        """最小出力制約を維持しながら需給バランスを調整"""
+        running_indices = [i for i, status in enumerate(status_flags) if status == 1]
+        
+        if not running_indices:
+            return
+        
+        current_total = sum(outputs[i] for i in running_indices)
+        adjustment_needed = demand - current_total
+        
+        if abs(adjustment_needed) <= self.lambda_tolerance:
+            return
+        
+        # 調整可能量を計算
+        adjustable_capacity = 0.0
+        for i in running_indices:
+            gen = generators[i]
+            if adjustment_needed > 0:  # 出力増加が必要
+                adjustable_capacity += gen.max_output - outputs[i]
+            else:  # 出力減少が必要
+                adjustable_capacity += outputs[i] - gen.min_output
+        
+        if adjustable_capacity <= 0:
+            return  # 調整不可能
+        
+        # 比例配分で調整
+        adjustment_ratio = min(1.0, abs(adjustment_needed) / adjustable_capacity)
+        
+        for i in running_indices:
+            gen = generators[i]
+            
+            if adjustment_needed > 0:  # 出力増加
+                max_increase = gen.max_output - outputs[i]
+                increase = max_increase * adjustment_ratio
+                outputs[i] = min(outputs[i] + increase, gen.max_output)
+            else:  # 出力減少
+                max_decrease = outputs[i] - gen.min_output
+                decrease = max_decrease * adjustment_ratio
+                outputs[i] = max(outputs[i] - decrease, gen.min_output)
+    
     def find_lambda_binary_search(self, generators: List[GeneratorConfig], 
                                  demand: float, status_flags: np.ndarray) -> float:
-        """バイナリサーチでλを探索"""
+        """バイナリサーチでλを探索（最小出力制約考慮）"""
+        # 運転中発電機の最小・最大出力をチェック
+        running_generators = [(i, gen) for i, gen in enumerate(generators) if status_flags[i] == 1]
+        
+        if not running_generators:
+            return self.lambda_min
+        
+        min_total = sum(gen.min_output for _, gen in running_generators)
+        max_total = sum(gen.max_output for _, gen in running_generators)
+        
+        # 需要が実現可能範囲外の場合
+        if demand <= min_total:
+            # 最小出力の限界費用を返す
+            min_lambda = float('inf')
+            for _, gen in running_generators:
+                marginal_cost = (2 * gen.heat_rate_a * gen.min_output + gen.heat_rate_b) * gen.fuel_price / 1000
+                min_lambda = min(min_lambda, marginal_cost)
+            return max(self.lambda_min, min_lambda)
+        
+        if demand >= max_total:
+            # 最大出力の限界費用を返す
+            max_lambda = 0
+            for _, gen in running_generators:
+                marginal_cost = (2 * gen.heat_rate_a * gen.max_output + gen.heat_rate_b) * gen.fuel_price / 1000
+                max_lambda = max(max_lambda, marginal_cost)
+            return min(self.lambda_max, max_lambda)
+        
+        # 通常のバイナリサーチ
         lambda_low = self.lambda_min
         lambda_high = self.lambda_max
         
@@ -127,45 +298,6 @@ class EconomicDispatchSolver:
                 lambda_low = lambda_mid
         
         return lambda_mid
-    
-    def solve_economic_dispatch(self, generators: List[GeneratorConfig], 
-                              demand_data: np.ndarray, output_flags: np.ndarray) -> Dict:
-        """経済配分計算"""
-        time_steps = len(demand_data)
-        gen_count = len(generators)
-        
-        # λ値と出力の保存配列
-        lambda_values = np.zeros(time_steps)
-        power_outputs = np.zeros((gen_count, time_steps))
-        
-        # 各時刻での計算
-        for t in range(time_steps):
-            demand = demand_data[t]
-            status_flags = output_flags[:, t]
-            
-            # λ探索
-            lambda_val = self.find_lambda_binary_search(generators, demand, status_flags)
-            lambda_values[t] = lambda_val
-            
-            # 各発電機の出力計算
-            for i, gen in enumerate(generators):
-                status = status_flags[i]
-                
-                if status == 0 or status == 2:  # 停止中または起動中
-                    power_outputs[i, t] = 0.0
-                elif status == 1:  # 運転中
-                    power_outputs[i, t] = self.calculate_output_from_lambda(gen, lambda_val)
-                else:
-                    power_outputs[i, t] = 0.0
-        
-        return {
-            'lambda_values': lambda_values,
-            'power_outputs': power_outputs,
-            'total_costs': self.calculate_fuel_costs(generators, power_outputs, output_flags)
-        }
-    
-    def calculate_fuel_costs(self, generators: List[GeneratorConfig], 
-                           power_outputs: np.ndarray, output_flags: np.ndarray) -> Dict:
         """燃料費計算"""
         time_steps = power_outputs.shape[1]
         gen_count = len(generators)
