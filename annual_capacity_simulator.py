@@ -1085,11 +1085,10 @@ def display_annual_results():
     # ダウンロードセクション
         show_download_section(summary_df, results, annual_comparator)
         def show_annual_demand_comparison(results, capacity_list, annual_demand):
-            
-        """年間需要比較タブの内容"""
-        st.subheader("年間需要カーブ比較")
-    # グラフ表示期間選択
-        col1, col2, col3 = st.columns(3)
+            """年間需要比較タブの内容"""
+            st.subheader("年間需要カーブ比較")
+            # グラフ表示期間選択
+    col1, col2, col3 = st.columns(3)
     with col1:
         graph_period = st.selectbox(
             "表示期間",
