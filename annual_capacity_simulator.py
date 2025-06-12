@@ -1,4 +1,5 @@
-"""年間容量シミュレーション専用アプリケーション（デバッグ版）
+"""
+年間容量シミュレーション専用アプリケーション（デバッグ版）
 複数容量での年間需要平準化効果比較を実行
 """
 
@@ -1083,11 +1084,12 @@ def display_annual_results():
         show_capacity_recommendation(results, capacity_list)
     
     # ダウンロードセクション
-        show_download_section(summary_df, results, annual_comparator)
-        def show_annual_demand_comparison(results, capacity_list, annual_demand):
-            """年間需要比較タブの内容"""
-            st.subheader("年間需要カーブ比較")
-            # グラフ表示期間選択
+    show_download_section(summary_df, results, annual_comparator)
+    def show_annual_demand_comparison(results, capacity_list, annual_demand):
+    """年間需要比較タブの内容"""
+    st.subheader("年間需要カーブ比較")
+    
+    # グラフ表示期間選択
     col1, col2, col3 = st.columns(3)
     with col1:
         graph_period = st.selectbox(
