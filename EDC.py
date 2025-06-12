@@ -1095,6 +1095,35 @@ def create_summary_metrics(uc_result: Dict, ed_result: Dict = None) -> Dict:
         metrics['lambda_std'] = lambda_values.std()
     
     return metrics
+
+def get_default_generator_config(index: int) -> dict:
+    """デフォルト発電機設定を取得"""
+    defaults = {
+        0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
+            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420},
+        1: {"name": "DG4", "type": "DG", "min": 1200, "max": 4000, "priority": 2, 
+            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103},
+        2: {"name": "DG5", "type": "DG", "min": 1500, "max": 5000, "priority": 3, 
+            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300},
+        3: {"name": "DG6", "type": "DG", "min": 800, "max": 2500, "priority": 4, 
+            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
+        4: {"name": "DG7", "type": "DG", "min": 2000, "max": 6000, "priority": 5, 
+            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
+        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
+    }
+    
+    if index in defaults:
+        return defaults[index]
+    else:
+        return {"name": f"発電機{index+1}", "type": "DG", "min": 1000, "max": 5000, "priority": index+1,
+                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300}
+
+def main():
     """デフォルト発電機設定を取得"""
     defaults = {
         0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
@@ -1674,6 +1703,7 @@ def main():
                         label="平均需要", 
                         value=f"{metrics['demand_avg']:.0f} kW"
                     )
+                    
 
 if __name__ == "__main__":
     main()
