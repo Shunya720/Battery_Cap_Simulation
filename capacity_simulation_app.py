@@ -790,6 +790,48 @@ def main():
                         st.error(f"詳細結果生成エラー: {e}")
                         import traceback
                         st.text(traceback.format_exc())
+
+
+
+# デバッグ用のテスト関数Add commentMore actions
+def debug_test():
+    """デバッグ用のテスト関数"""
+    st.sidebar.header("デバッグモード")
+    
+    if st.sidebar.button("テストデータ生成"):
+        # テスト用の需要データを生成
+        np.random.seed(42)
+        base_demand = 5000
+        daily_pattern = np.sin(np.linspace(0, 2*np.pi, 96)) * 1000
+        noise = np.random.normal(0, 200, 96)
+        test_demand = base_demand + daily_pattern + noise
+        test_demand = np.maximum(test_demand, 1000)  # 最小値制限
+        
+        # セッション状態に保存
+        st.session_state.test_demand = test_demand
+        st.sidebar.success("テストデータ生成完了")
+        
+        # テストデータの可視化
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            y=test_demand,
+            mode='lines',
+            name='テスト需要データ'
+        ))
+        fig.update_layout(title="生成されたテストデータ")
+        st.sidebar.plotly_chart(fig, use_container_width=True)
+    
+    if hasattr(st.session_state, 'test_demand'):
+        if st.sidebar.button("テストデータをメインに適用"):
+            st.session_state.demand_forecast = st.session_state.test_demand
+            st.sidebar.success("テストデータを適用しました")
+            st.rerun()
+
+
+if __name__ == "__main__":
+    # デバッグモードの表示
+    if st.sidebar.checkbox("デバッグモード有効", value=False):
+        debug_test()
     
     else:
         st.warning("需要予測データをアップロードしてください")
