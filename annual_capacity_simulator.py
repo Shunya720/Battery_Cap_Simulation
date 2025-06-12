@@ -1,65 +1,4 @@
-def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_summary):
-        """季節別統計計算（月別サマリーから算出）"""
-        seasons = {
-            'spring': [3, 4, 5],    # 春
-            'summer': [6, 7, 8],    # 夏  
-            'autumn': [9, 10, 11],  # 秋
-            'winter': [12, 1, 2]    # 冬
-        }
-        
-        seasonal_stats = {}
-        
-        for season_name, months in seasons.items():
-            seasonal_original = []
-            seasonal_controlled = []
-            seasonal_discharge = 0
-            
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            
-            start_idx = 0
-            for month in range(1, 13):
-                }
-            else:
-                seasonal_stats[season_name] = {
-                    'peak_reduction': 0,
-                    'average_reduction': 0,
-                    'total_discharge': 0
-                }
-        
-        return seasonal_stats
-    
-    def _get_month_from_day_simple(self, day_of_year):
-        """年間通算日から月を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            cumulative_days += days
-            if day_of_year < cumulative_days:
-                return month + 1
-        return 12
-    
-    def _get_day_in_month_simple(self, day_of_year):
-        """年間通算日から月内日付を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            if day_of_year < cumulative_days + days:
-                return day_of_year - cumulative_days + 1
-            cumulative_days += days
-        return 31end_idx = start_idx + (days_per_month[month-1] * 96)
-                if month in months and month in monthly_summary:
-                    if end_idx <= len(original_demand):
-                        seasonal_original.extend(original_demand[start_idx:end_idx])
-                        seasonal_controlled.extend(controlled_demand[start_idx:end_idx])
-                        seasonal_discharge += monthly_summary[month]['monthly_discharge']
-                start_idx = end_idx
-            
-            if seasonal_original:
-                seasonal_stats[season_name] = {
-                    'peak_reduction': np.max(seasonal_original) - np.max(seasonal_controlled),
-                    'average_reduction': np.mean(seasonal_original) - np.mean(seasonal_controlled),
-                    'total_discharge': seasonal_discharge
-                """
+"""
 年間容量シミュレーション専用アプリケーション（デバッグ版）
 複数容量での年間需要平準化効果比較を実行
 """
@@ -451,8 +390,8 @@ class AnnualBatteryCapacityComparator:
         
         return self.comparison_results
     
-    def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_results):
-        """季節別統計計算"""
+    def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_summary):
+        """季節別統計計算（月別サマリーから算出）"""
         seasons = {
             'spring': [3, 4, 5],    # 春
             'summer': [6, 7, 8],    # 夏  
@@ -472,11 +411,11 @@ class AnnualBatteryCapacityComparator:
             start_idx = 0
             for month in range(1, 13):
                 end_idx = start_idx + (days_per_month[month-1] * 96)
-                if month in months and month in monthly_results:
+                if month in months and month in monthly_summary:
                     if end_idx <= len(original_demand):
                         seasonal_original.extend(original_demand[start_idx:end_idx])
                         seasonal_controlled.extend(controlled_demand[start_idx:end_idx])
-                        seasonal_discharge += monthly_results[month]['monthly_discharge']
+                        seasonal_discharge += monthly_summary[month]['monthly_discharge']
                 start_idx = end_idx
             
             if seasonal_original:
@@ -493,6 +432,26 @@ class AnnualBatteryCapacityComparator:
                 }
         
         return seasonal_stats
+    
+    def _get_month_from_day_simple(self, day_of_year):
+        """年間通算日から月を取得（簡易版）"""
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            cumulative_days += days
+            if day_of_year < cumulative_days:
+                return month + 1
+        return 12
+    
+    def _get_day_in_month_simple(self, day_of_year):
+        """年間通算日から月内日付を取得（簡易版）"""
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            if day_of_year < cumulative_days + days:
+                return day_of_year - cumulative_days + 1
+            cumulative_days += days
+        return 31
     
     def get_annual_comparison_summary(self):
         """年間比較結果のサマリー取得"""
@@ -1111,578 +1070,603 @@ def display_annual_results():
     tab1, tab2, tab3, tab4 = st.tabs(["年間需要比較", "季節別分析", "月別詳細", "推奨容量"])
     
     with tab1:
-        st.subheader("年間需要カーブ比較")
-        
-        # グラフ表示期間選択
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            graph_period = st.selectbox(
-                "表示期間",
-                ["1週間", "1ヶ月", "3ヶ月", "全年間（サンプル）"],
-                index=0,
-                key="graph_period_select"
-            )
-        
-        with col2:
-            if graph_period in ["1週間", "1ヶ月", "3ヶ月"]:
-                start_month = st.selectbox(
-                    "開始月",
-                    list(range(1, 13)),
-                    index=0,
-                    format_func=lambda x: f"{x}月",
-                    key="start_month_select"
-                )
-            else:
-                start_month = 1
-        
-        with col3:
-            selected_capacity_graph = st.selectbox(
-                "表示する容量",
-                capacity_list,
-                index=0,
-                format_func=lambda x: f"{x:,}kWh",
-                key="selected_capacity_graph"
-            )
-        
-        # データ期間とサンプリング設定
-        if graph_period == "1週間":
-            # 指定月の第1週
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
-            end_idx = start_idx + (7 * 96)  # 1週間分
-            period_title = f"{start_month}月第1週"
-        elif graph_period == "1ヶ月":
-            # 指定月全体
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
-            end_idx = start_idx + (days_per_month[start_month-1] * 96)
-            period_title = f"{start_month}月"
-        elif graph_period == "3ヶ月":
-            # 指定月から3ヶ月
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
-            end_month = min(start_month + 2, 12)
-            end_idx = sum(days_per_month[:end_month]) * 96
-            period_title = f"{start_month}月〜{end_month}月"
-        else:
-            # 全年間（サンプル表示）
-            start_idx = 0
-            end_idx = len(annual_demand)
-            # サンプリング（表示負荷軽減のため）
-            sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
-            sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
-            period_title = "全年間（サンプル表示）"
-        
-        # データ抽出
-        if graph_period != "全年間（サンプル）":
-            # 指定期間のデータを抽出
-            end_idx = min(end_idx, len(annual_demand))
-            period_demand = annual_demand[start_idx:end_idx]
-            
-            if selected_capacity_graph in results:
-                period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
-            else:
-                period_controlled = period_demand  # フォールバック
-            
-            # 時系列作成
-            time_series = create_annual_time_series()
-            period_times = time_series[start_idx:end_idx]
-        else:
-            # 全年間サンプル表示
-            period_demand = annual_demand[sample_indices]
-            
-            if selected_capacity_graph in results:
-                period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
-            else:
-                period_controlled = period_demand
-            
-            time_series = create_annual_time_series()
-            period_times = [time_series[i] for i in sample_indices]
-        
-        # 需要比較グラフ
-        fig_demand = go.Figure()
-        
-        # 元需要予測
-        fig_demand.add_trace(go.Scatter(
-            x=period_times,
-            y=period_demand,
-            name="元需要予測",
-            line=dict(color="lightblue", width=2),
-            opacity=0.8
-        ))
-        
-        # 電池制御後需要
-        fig_demand.add_trace(go.Scatter(
-            x=period_times,
-            y=period_controlled,
-            name=f"電池制御後（{selected_capacity_graph:,}kWh）",
-            line=dict(color="red", width=2)
-        ))
-        
-        fig_demand.update_layout(
-            title=f"需要カーブ比較 - {period_title}",
-            xaxis_title="日時",
-            yaxis_title="需要 (kW)",
-            height=500,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-            hovermode='x unified'
+        show_annual_demand_comparison(results, capacity_list, annual_demand)
+    
+    with tab2:
+        show_seasonal_analysis(results)
+    
+    with tab3:
+        show_monthly_detail_analysis(results, capacity_list, annual_comparator)
+    
+    with tab4:
+        show_capacity_recommendation(results, capacity_list)
+    
+    # ダウンロードセクション
+    show_download_section(summary_df, results, annual_comparator)
+
+
+def show_annual_demand_comparison(results, capacity_list, annual_demand):
+    """年間需要比較タブの内容"""
+    st.subheader("年間需要カーブ比較")
+    
+    # グラフ表示期間選択
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        graph_period = st.selectbox(
+            "表示期間",
+            ["1週間", "1ヶ月", "3ヶ月", "全年間（サンプル）"],
+            index=0,
+            key="graph_period_select"
         )
-        
-        st.plotly_chart(fig_demand, use_container_width=True)
-        
-        # 効果統計表示
-        if selected_capacity_graph in results:
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                peak_reduction = np.max(period_demand) - np.max(period_controlled)
-                st.metric("ピーク削減", f"{peak_reduction:.1f} kW")
-            
-            with col2:
-                avg_reduction = np.mean(period_demand) - np.mean(period_controlled)
-                st.metric("平均削減", f"{avg_reduction:.1f} kW")
-            
-            with col3:
-                range_original = np.max(period_demand) - np.min(period_demand)
-                range_controlled = np.max(period_controlled) - np.min(period_controlled)
-                range_improvement = range_original - range_controlled
-                st.metric("需要幅改善", f"{range_improvement:.1f} kW")
-            
-            with col4:
-                smoothness_original = np.std(np.diff(period_demand))
-                smoothness_controlled = np.std(np.diff(period_controlled))
-                smoothness_improvement = smoothness_original - smoothness_controlled
-                st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
-        
-        # 全容量比較グラフ（年間データのサンプル表示）
-        st.subheader("全容量比較（年間サンプル）")
-        
-        # データサンプリング（表示用）
-        sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
-        sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
-        
-        fig_annual = go.Figure()
-        
-        try:
-            # サンプル時系列作成
-            time_series = create_annual_time_series()
-            sample_times = [time_series[i] for i in sample_indices]
-            
-            # 元需要
-            fig_annual.add_trace(go.Scatter(
-                x=sample_times,
-                y=annual_demand[sample_indices],
-                name="元需要予測",
-                line=dict(color="lightgray", width=1),
-                opacity=0.8
-            ))
-            
-            # 各容量の制御後需要
-            colors = ['red', 'blue', 'green', 'orange', 'purple']
-            for i, (capacity, result) in enumerate(results.items()):
-                fig_annual.add_trace(go.Scatter(
-                    x=sample_times,
-                    y=result['demand_after_control'][sample_indices],
-                    name=f"容量{capacity:,}kWh制御後",
-                    line=dict(color=colors[i % len(colors)], width=2)
-                ))
-            
-            fig_annual.update_layout(
-                title="年間需要平準化効果比較（全容量・サンプル表示）",
-                xaxis_title="日時",
-                yaxis_title="需要 (kW)",
-                height=600,
-                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+    
+    with col2:
+        if graph_period in ["1週間", "1ヶ月", "3ヶ月"]:
+            start_month = st.selectbox(
+                "開始月",
+                list(range(1, 13)),
+                index=0,
+                format_func=lambda x: f"{x}月",
+                key="start_month_select"
             )
-            
-            st.plotly_chart(fig_annual, use_container_width=True)
-            
-        except Exception as e:
-            st.error(f"年間グラフ作成エラー: {e}")
-        
-        # バッテリー出力グラフ
-        st.subheader("バッテリー出力パターン")
+        else:
+            start_month = 1
+    
+    with col3:
+        selected_capacity_graph = st.selectbox(
+            "表示する容量",
+            capacity_list,
+            index=0,
+            format_func=lambda x: f"{x:,}kWh",
+            key="selected_capacity_graph"
+        )
+    
+    # データ期間とサンプリング設定
+    if graph_period == "1週間":
+        # 指定月の第1週
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        start_idx = sum(days_per_month[:start_month-1]) * 96
+        end_idx = start_idx + (7 * 96)  # 1週間分
+        period_title = f"{start_month}月第1週"
+    elif graph_period == "1ヶ月":
+        # 指定月全体
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        start_idx = sum(days_per_month[:start_month-1]) * 96
+        end_idx = start_idx + (days_per_month[start_month-1] * 96)
+        period_title = f"{start_month}月"
+    elif graph_period == "3ヶ月":
+        # 指定月から3ヶ月
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        start_idx = sum(days_per_month[:start_month-1]) * 96
+        end_month = min(start_month + 2, 12)
+        end_idx = sum(days_per_month[:end_month]) * 96
+        period_title = f"{start_month}月〜{end_month}月"
+    else:
+        # 全年間（サンプル表示）
+        start_idx = 0
+        end_idx = len(annual_demand)
+        # サンプリング（表示負荷軽減のため）
+        sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
+        sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
+        period_title = "全年間（サンプル表示）"
+    
+    # データ抽出
+    if graph_period != "全年間（サンプル）":
+        # 指定期間のデータを抽出
+        end_idx = min(end_idx, len(annual_demand))
+        period_demand = annual_demand[start_idx:end_idx]
         
         if selected_capacity_graph in results:
-            # 同じ期間のバッテリー出力を表示
-            if graph_period != "全年間（サンプル）":
-                battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
-                battery_times = period_times
-            else:
-                battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
-                battery_times = period_times
-            
-            fig_battery = go.Figure()
-            
-            # 充電（正の値）と放電（負の値）を色分け
-            charging = np.where(battery_output >= 0, battery_output, 0)
-            discharging = np.where(battery_output < 0, battery_output, 0)
-            
-            fig_battery.add_trace(go.Scatter(
-                x=battery_times,
-                y=charging,
-                name="充電",
-                fill='tozeroy',
-                line=dict(color="blue"),
-                opacity=0.7
-            ))
-            
-            fig_battery.add_trace(go.Scatter(
-                x=battery_times,
-                y=discharging,
-                name="放電",
-                fill='tozeroy',
-                line=dict(color="orange"),
-                opacity=0.7
-            ))
-            
-            fig_battery.update_layout(
-                title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
-                xaxis_title="日時",
-                yaxis_title="出力 (kW)",
-                height=400,
-                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-            )
-            
-            st.plotly_chart(fig_battery, use_container_width=True)
+            period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
+        else:
+            period_controlled = period_demand  # フォールバック
         
-        # 年間統計
+        # 時系列作成
+        time_series = create_annual_time_series()
+        period_times = time_series[start_idx:end_idx]
+    else:
+        # 全年間サンプル表示
+        period_demand = annual_demand[sample_indices]
+        
+        if selected_capacity_graph in results:
+            period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
+        else:
+            period_controlled = period_demand
+        
+        time_series = create_annual_time_series()
+        period_times = [time_series[i] for i in sample_indices]
+    
+    # 需要比較グラフ
+    fig_demand = go.Figure()
+    
+    # 元需要予測
+    fig_demand.add_trace(go.Scatter(
+        x=period_times,
+        y=period_demand,
+        name="元需要予測",
+        line=dict(color="lightblue", width=2),
+        opacity=0.8
+    ))
+    
+    # 電池制御後需要
+    fig_demand.add_trace(go.Scatter(
+        x=period_times,
+        y=period_controlled,
+        name=f"電池制御後（{selected_capacity_graph:,}kWh）",
+        line=dict(color="red", width=2)
+    ))
+    
+    fig_demand.update_layout(
+        title=f"需要カーブ比較 - {period_title}",
+        xaxis_title="日時",
+        yaxis_title="需要 (kW)",
+        height=500,
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig_demand, use_container_width=True)
+    
+    # 効果統計表示
+    if selected_capacity_graph in results:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.subheader("年間ピーク削減効果")
-            peak_data = []
-            for capacity, result in results.items():
-                peak_data.append({
-                    'capacity': f"{capacity:,}kWh",
-                    'peak_reduction': result['annual_peak_reduction']
-                })
-            
-            fig_peak = px.bar(
-                pd.DataFrame(peak_data),
-                x='capacity', y='peak_reduction',
-                title="容量別年間ピーク削減量"
-            )
-            st.plotly_chart(fig_peak, use_container_width=True)
+            peak_reduction = np.max(period_demand) - np.max(period_controlled)
+            st.metric("ピーク削減", f"{peak_reduction:.1f} kW")
         
         with col2:
-            st.subheader("年間放電量")
-            discharge_data = []
-            for capacity, result in results.items():
-                discharge_data.append({
-                    'capacity': f"{capacity:,}kWh",
-                    'discharge': result['annual_discharge'] / 1000  # MWh換算
-                })
-            
-            fig_discharge = px.bar(
-                pd.DataFrame(discharge_data),
-                x='capacity', y='discharge',
-                title="容量別年間放電量 (MWh)"
-            )
-            st.plotly_chart(fig_discharge, use_container_width=True)
+            avg_reduction = np.mean(period_demand) - np.mean(period_controlled)
+            st.metric("平均削減", f"{avg_reduction:.1f} kW")
         
         with col3:
-            st.subheader("容量効率")
-            efficiency_data = []
-            for capacity, result in results.items():
-                efficiency = result['annual_peak_reduction'] / (capacity / 1000)  # kW削減/MWh容量
-                efficiency_data.append({
-                    'capacity': f"{capacity:,}kWh",
-                    'efficiency': efficiency
-                })
-            
-            fig_efficiency = px.bar(
-                pd.DataFrame(efficiency_data),
-                x='capacity', y='efficiency',
-                title="容量効率 (kW削減/MWh容量)"
-            )
-            st.plotly_chart(fig_efficiency, use_container_width=True)
+            range_original = np.max(period_demand) - np.min(period_demand)
+            range_controlled = np.max(period_controlled) - np.min(period_controlled)
+            range_improvement = range_original - range_controlled
+            st.metric("需要幅改善", f"{range_improvement:.1f} kW")
         
         with col4:
-            st.subheader("サイクル数実績")
-            cycle_data = []
-            for capacity, result in results.items():
-                actual_cycles = result['annual_discharge'] / capacity if capacity > 0 else 0
-                cycle_data.append({
-                    'capacity': f"{capacity:,}kWh",
-                    'cycles': actual_cycles
-                })
-            
-            fig_cycles = px.bar(
-                pd.DataFrame(cycle_data),
-                x='capacity', y='cycles',
-                title="容量別年間サイクル数"
-            )
-            # 目標サイクル数の水平線を追加
-            fig_cycles.add_hline(
-                y=st.session_state.sim_annual_cycle_ratio, 
-                line_dash="dash", 
-                line_color="red",
-                annotation_text=f"目標: {st.session_state.sim_annual_cycle_ratio:.0f}回/年"
-            )
-            st.plotly_chart(fig_cycles, use_container_width=True)
+            smoothness_original = np.std(np.diff(period_demand))
+            smoothness_controlled = np.std(np.diff(period_controlled))
+            smoothness_improvement = smoothness_original - smoothness_controlled
+            st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
     
-    with tab2:
-        st.subheader("🌸 季節別分析")
+    # 全容量比較グラフ（年間データのサンプル表示）
+    st.subheader("全容量比較（年間サンプル）")
+    
+    # データサンプリング（表示用）
+    sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
+    sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
+    
+    fig_annual = go.Figure()
+    
+    try:
+        # サンプル時系列作成
+        time_series = create_annual_time_series()
+        sample_times = [time_series[i] for i in sample_indices]
         
-        # 季節別ピーク削減比較
-        seasonal_data = []
-        seasons = ['spring', 'summer', 'autumn', 'winter']
-        season_names = ['春', '夏', '秋', '冬']
+        # 元需要
+        fig_annual.add_trace(go.Scatter(
+            x=sample_times,
+            y=annual_demand[sample_indices],
+            name="元需要予測",
+            line=dict(color="lightgray", width=1),
+            opacity=0.8
+        ))
         
+        # 各容量の制御後需要
+        colors = ['red', 'blue', 'green', 'orange', 'purple']
+        for i, (capacity, result) in enumerate(results.items()):
+            fig_annual.add_trace(go.Scatter(
+                x=sample_times,
+                y=result['demand_after_control'][sample_indices],
+                name=f"容量{capacity:,}kWh制御後",
+                line=dict(color=colors[i % len(colors)], width=2)
+            ))
+        
+        fig_annual.update_layout(
+            title="年間需要平準化効果比較（全容量・サンプル表示）",
+            xaxis_title="日時",
+            yaxis_title="需要 (kW)",
+            height=600,
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        )
+        
+        st.plotly_chart(fig_annual, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"年間グラフ作成エラー: {e}")
+    
+    # バッテリー出力グラフ
+    st.subheader("バッテリー出力パターン")
+    
+    if selected_capacity_graph in results:
+        # 同じ期間のバッテリー出力を表示
+        if graph_period != "全年間（サンプル）":
+            battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
+            battery_times = period_times
+        else:
+            battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
+            battery_times = period_times
+        
+        fig_battery = go.Figure()
+        
+        # 充電（正の値）と放電（負の値）を色分け
+        charging = np.where(battery_output >= 0, battery_output, 0)
+        discharging = np.where(battery_output < 0, battery_output, 0)
+        
+        fig_battery.add_trace(go.Scatter(
+            x=battery_times,
+            y=charging,
+            name="充電",
+            fill='tozeroy',
+            line=dict(color="blue"),
+            opacity=0.7
+        ))
+        
+        fig_battery.add_trace(go.Scatter(
+            x=battery_times,
+            y=discharging,
+            name="放電",
+            fill='tozeroy',
+            line=dict(color="orange"),
+            opacity=0.7
+        ))
+        
+        fig_battery.update_layout(
+            title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
+            xaxis_title="日時",
+            yaxis_title="出力 (kW)",
+            height=400,
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        )
+        
+        st.plotly_chart(fig_battery, use_container_width=True)
+    
+    # 年間統計
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.subheader("年間ピーク削減効果")
+        peak_data = []
         for capacity, result in results.items():
-            for season, season_name in zip(seasons, season_names):
-                seasonal_data.append({
-                    '容量': f"{capacity:,}kWh",
-                    '季節': season_name,
-                    'ピーク削減': result['seasonal_stats'][season]['peak_reduction'],
-                    '平均削減': result['seasonal_stats'][season]['average_reduction'],
-                    '放電量': result['seasonal_stats'][season]['total_discharge']
-                })
+            peak_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'peak_reduction': result['annual_peak_reduction']
+            })
         
-        seasonal_df = pd.DataFrame(seasonal_data)
+        fig_peak = px.bar(
+            pd.DataFrame(peak_data),
+            x='capacity', y='peak_reduction',
+            title="容量別年間ピーク削減量"
+        )
+        st.plotly_chart(fig_peak, use_container_width=True)
+    
+    with col2:
+        st.subheader("年間放電量")
+        discharge_data = []
+        for capacity, result in results.items():
+            discharge_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'discharge': result['annual_discharge'] / 1000  # MWh換算
+            })
         
-        if not seasonal_df.empty:
+        fig_discharge = px.bar(
+            pd.DataFrame(discharge_data),
+            x='capacity', y='discharge',
+            title="容量別年間放電量 (MWh)"
+        )
+        st.plotly_chart(fig_discharge, use_container_width=True)
+    
+    with col3:
+        st.subheader("容量効率")
+        efficiency_data = []
+        for capacity, result in results.items():
+            efficiency = result['annual_peak_reduction'] / (capacity / 1000)  # kW削減/MWh容量
+            efficiency_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'efficiency': efficiency
+            })
+        
+        fig_efficiency = px.bar(
+            pd.DataFrame(efficiency_data),
+            x='capacity', y='efficiency',
+            title="容量効率 (kW削減/MWh容量)"
+        )
+        st.plotly_chart(fig_efficiency, use_container_width=True)
+    
+    with col4:
+        st.subheader("サイクル数実績")
+        cycle_data = []
+        for capacity, result in results.items():
+            actual_cycles = result['annual_discharge'] / capacity if capacity > 0 else 0
+            cycle_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'cycles': actual_cycles
+            })
+        
+        fig_cycles = px.bar(
+            pd.DataFrame(cycle_data),
+            x='capacity', y='cycles',
+            title="容量別年間サイクル数"
+        )
+        # 目標サイクル数の水平線を追加
+        fig_cycles.add_hline(
+            y=st.session_state.sim_annual_cycle_ratio, 
+            line_dash="dash", 
+            line_color="red",
+            annotation_text=f"目標: {st.session_state.sim_annual_cycle_ratio:.0f}回/年"
+        )
+        st.plotly_chart(fig_cycles, use_container_width=True)
+
+
+def show_seasonal_analysis(results):
+    """季節別分析タブの内容"""
+    st.subheader("🌸 季節別分析")
+    
+    # 季節別ピーク削減比較
+    seasonal_data = []
+    seasons = ['spring', 'summer', 'autumn', 'winter']
+    season_names = ['春', '夏', '秋', '冬']
+    
+    for capacity, result in results.items():
+        for season, season_name in zip(seasons, season_names):
+            seasonal_data.append({
+                '容量': f"{capacity:,}kWh",
+                '季節': season_name,
+                'ピーク削減': result['seasonal_stats'][season]['peak_reduction'],
+                '平均削減': result['seasonal_stats'][season]['average_reduction'],
+                '放電量': result['seasonal_stats'][season]['total_discharge']
+            })
+    
+    seasonal_df = pd.DataFrame(seasonal_data)
+    
+    if not seasonal_df.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_seasonal_peak = px.bar(
+                seasonal_df, x='季節', y='ピーク削減', color='容量',
+                title="季節別ピーク削減効果",
+                barmode='group'
+            )
+            st.plotly_chart(fig_seasonal_peak, use_container_width=True)
+        
+        with col2:
+            fig_seasonal_avg = px.bar(
+                seasonal_df, x='季節', y='平均削減', color='容量',
+                title="季節別平均削減効果",
+                barmode='group'
+            )
+            st.plotly_chart(fig_seasonal_avg, use_container_width=True)
+        
+        # 季節別詳細テーブル
+        st.subheader("季節別詳細データ")
+        pivot_peak = seasonal_df.pivot(index='容量', columns='季節', values='ピーク削減')
+        st.dataframe(pivot_peak, use_container_width=True)
+
+
+def show_monthly_detail_analysis(results, capacity_list, annual_comparator):
+    """月別詳細分析タブの内容"""
+    st.subheader("📅 日別・月別詳細分析")
+    
+    # 容量選択
+    selected_capacity = st.selectbox(
+        "詳細表示する容量を選択",
+        capacity_list,
+        format_func=lambda x: f"{x:,}kWh",
+        key="daily_detail_capacity_select"
+    )
+    
+    # 表示モード選択
+    detail_mode = st.radio(
+        "表示モード",
+        ["月別サマリー", "日別詳細"],
+        index=0,
+        key="detail_mode_select"
+    )
+    
+    if selected_capacity in results:
+        if detail_mode == "月別サマリー" and 'monthly_summary' in results[selected_capacity]:
+            # 月別サマリー表示
+            monthly_summary = results[selected_capacity]['monthly_summary']
+            
+            monthly_data = []
+            month_names = ['1月', '2月', '3月', '4月', '5月', '6月',
+                          '7月', '8月', '9月', '10月', '11月', '12月']
+            
+            for month in range(1, 13):
+                if month in monthly_summary:
+                    summary = monthly_summary[month]
+                    monthly_data.append({
+                        '月': month_names[month-1],
+                        'ピーク削減(kW)': f"{summary['peak_reduction']:.1f}",
+                        '月間放電(kWh)': f"{summary['monthly_discharge']:.0f}",
+                        '処理日数': f"{summary['days_count']}日"
+                    })
+            
+            monthly_df = pd.DataFrame(monthly_data)
+            st.dataframe(monthly_df, use_container_width=True)
+            
+            # 月別トレンド
             col1, col2 = st.columns(2)
             
             with col1:
-                fig_seasonal_peak = px.bar(
-                    seasonal_df, x='季節', y='ピーク削減', color='容量',
-                    title="季節別ピーク削減効果",
-                    barmode='group'
-                )
-                st.plotly_chart(fig_seasonal_peak, use_container_width=True)
-            
-            with col2:
-                fig_seasonal_avg = px.bar(
-                    seasonal_df, x='季節', y='平均削減', color='容量',
-                    title="季節別平均削減効果",
-                    barmode='group'
-                )
-                st.plotly_chart(fig_seasonal_avg, use_container_width=True)
-            
-            # 季節別詳細テーブル
-            st.subheader("季節別詳細データ")
-            pivot_peak = seasonal_df.pivot(index='容量', columns='季節', values='ピーク削減')
-            st.dataframe(pivot_peak, use_container_width=True)
-    
-    with tab3:
-        st.subheader("📅 日別・月別詳細分析")
-        
-        # 容量選択
-        selected_capacity = st.selectbox(
-            "詳細表示する容量を選択",
-            capacity_list,
-            format_func=lambda x: f"{x:,}kWh",
-            key="daily_detail_capacity_select"
-        )
-        
-        # 表示モード選択
-        detail_mode = st.radio(
-            "表示モード",
-            ["月別サマリー", "日別詳細"],
-            index=0,
-            key="detail_mode_select"
-        )
-        
-        if selected_capacity in results:
-            if detail_mode == "月別サマリー" and 'monthly_summary' in results[selected_capacity]:
-                # 月別サマリー表示
-                monthly_summary = results[selected_capacity]['monthly_summary']
-                
-                monthly_data = []
-                month_names = ['1月', '2月', '3月', '4月', '5月', '6月',
-                              '7月', '8月', '9月', '10月', '11月', '12月']
-                
+                monthly_peak_data = []
                 for month in range(1, 13):
                     if month in monthly_summary:
-                        summary = monthly_summary[month]
-                        monthly_data.append({
-                            '月': month_names[month-1],
-                            'ピーク削減(kW)': f"{summary['peak_reduction']:.1f}",
-                            '月間放電(kWh)': f"{summary['monthly_discharge']:.0f}",
-                            '処理日数': f"{summary['days_count']}日"
+                        monthly_peak_data.append({
+                            'month': month_names[month-1],
+                            'peak_reduction': monthly_summary[month]['peak_reduction']
                         })
                 
-                monthly_df = pd.DataFrame(monthly_data)
-                st.dataframe(monthly_df, use_container_width=True)
-                
-                # 月別トレンド
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    monthly_peak_data = []
-                    for month in range(1, 13):
-                        if month in monthly_summary:
-                            monthly_peak_data.append({
-                                'month': month_names[month-1],
-                                'peak_reduction': monthly_summary[month]['peak_reduction']
-                            })
-                    
-                    if monthly_peak_data:
-                        fig_monthly_peak = px.line(
-                            pd.DataFrame(monthly_peak_data),
-                            x='month', y='peak_reduction',
-                            title=f"月別ピーク削減トレンド（容量{selected_capacity:,}kWh）"
-                        )
-                        st.plotly_chart(fig_monthly_peak, use_container_width=True)
-                
-                with col2:
-                    monthly_discharge_data = []
-                    for month in range(1, 13):
-                        if month in monthly_summary:
-                            monthly_discharge_data.append({
-                                'month': month_names[month-1],
-                                'discharge': monthly_summary[month]['monthly_discharge']
-                            })
-                    
-                    if monthly_discharge_data:
-                        fig_monthly_discharge = px.line(
-                            pd.DataFrame(monthly_discharge_data),
-                            x='month', y='discharge',
-                            title=f"月別放電量トレンド（容量{selected_capacity:,}kWh）"
-                        )
-                        st.plotly_chart(fig_monthly_discharge, use_container_width=True)
-            
-            elif detail_mode == "日別詳細" and 'daily_results' in results[selected_capacity]:
-                # 日別詳細表示
-                daily_results = results[selected_capacity]['daily_results']
-                
-                # 月選択
-                selected_month = st.selectbox(
-                    "表示する月",
-                    list(range(1, 13)),
-                    index=0,
-                    format_func=lambda x: f"{x}月",
-                    key="selected_month_detail"
-                )
-                
-                # 選択月の日別データ抽出
-                month_daily_data = []
-                for day, result in daily_results.items():
-                    # 日から月を計算（簡易版）
-                    day_month = annual_comparator._get_month_from_day_simple(day - 1)
-                    if day_month == selected_month:
-                        month_daily_data.append({
-                            '日': day,
-                            '日付': f"{selected_month}月{annual_comparator._get_day_in_month_simple(day - 1)}日",
-                            'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
-                            '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
-                            '需要幅改善(kW)': f"{result['range_improvement']:.1f}"
-                        })
-                
-                if month_daily_data:
-                    daily_df = pd.DataFrame(month_daily_data)
-                    st.dataframe(daily_df, use_container_width=True)
-                    
-                    # 日別トレンド（選択月）
-                    fig_daily = px.line(
-                        daily_df,
-                        x='日付', y='ピーク削減(kW)',
-                        title=f"{selected_month}月の日別ピーク削減トレンド"
+                if monthly_peak_data:
+                    fig_monthly_peak = px.line(
+                        pd.DataFrame(monthly_peak_data),
+                        x='month', y='peak_reduction',
+                        title=f"月別ピーク削減トレンド（容量{selected_capacity:,}kWh）"
                     )
-                    fig_daily.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_daily, use_container_width=True)
-                else:
-                    st.info(f"{selected_month}月のデータがありません")
-    
-    with tab4:
-        st.subheader("🏆 推奨容量判定")
-        
-        # 推奨容量の総合評価
-        try:
-            best_capacity = None
-            best_score = -1
-            evaluation_results = []
-            
-            for capacity, result in results.items():
-                # 各指標のスコア計算
-                peak_score = result.get('annual_peak_reduction', 0) * 0.3
-                efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25
-                cycle_score = 100 if result.get('annual_cycle_constraint_satisfied', False) else 0
-                seasonal_balance_score = np.std([
-                    result['seasonal_stats']['spring']['peak_reduction'],
-                    result['seasonal_stats']['summer']['peak_reduction'],
-                    result['seasonal_stats']['autumn']['peak_reduction'],
-                    result['seasonal_stats']['winter']['peak_reduction']
-                ]) * (-0.2)  # 標準偏差が小さい方が良い
-                
-                total_score = peak_score + efficiency_score + cycle_score * 0.2 + seasonal_balance_score
-                
-                evaluation_results.append({
-                    '容量(kWh)': f"{capacity:,}",
-                    'ピーク削減スコア': f"{peak_score:.1f}",
-                    '容量効率スコア': f"{efficiency_score:.1f}",
-                    'サイクル制約スコア': f"{cycle_score * 0.2:.1f}",
-                    '季節バランススコア': f"{seasonal_balance_score:.1f}",
-                    '総合スコア': f"{total_score:.1f}"
-                })
-                
-                if total_score > best_score:
-                    best_score = total_score
-                    best_capacity = capacity
-            
-            # 評価結果テーブル
-            st.dataframe(pd.DataFrame(evaluation_results), use_container_width=True)
-            
-            # 推奨容量の詳細
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if best_capacity is not None:
-                    st.success(f"""
-                    **🥇 総合推奨容量**
-                    
-                    **{best_capacity:,}kWh**
-                    
-                    総合スコア: {best_score:.1f}点
-                    
-                    推奨理由:
-                    - 年間通して安定した効果
-                    - 容量効率が優秀
-                    - サイクル制約を満足
-                    """)
+                    st.plotly_chart(fig_monthly_peak, use_container_width=True)
             
             with col2:
-                # 最大ピーク削減容量
-                best_peak_capacity = max(results.keys(), 
-                                       key=lambda x: results[x].get('annual_peak_reduction', 0))
-                peak_value = results[best_peak_capacity].get('annual_peak_reduction', 0)
+                monthly_discharge_data = []
+                for month in range(1, 13):
+                    if month in monthly_summary:
+                        monthly_discharge_data.append({
+                            'month': month_names[month-1],
+                            'discharge': monthly_summary[month]['monthly_discharge']
+                        })
                 
-                st.info(f"""
-                **📈 最大ピーク削減**
-                
-                **{best_peak_capacity:,}kWh**
-                
-                年間ピーク削減: {peak_value:.1f}kW
-                
-                特徴:
-                - 最大需要の大幅削減
-                - 電力契約容量削減効果大
-                """)
+                if monthly_discharge_data:
+                    fig_monthly_discharge = px.line(
+                        pd.DataFrame(monthly_discharge_data),
+                        x='month', y='discharge',
+                        title=f"月別放電量トレンド（容量{selected_capacity:,}kWh）"
+                    )
+                    st.plotly_chart(fig_monthly_discharge, use_container_width=True)
+        
+        elif detail_mode == "日別詳細" and 'daily_results' in results[selected_capacity]:
+            # 日別詳細表示
+            daily_results = results[selected_capacity]['daily_results']
             
-            with col3:
-                # 最高効率容量
-                best_efficiency_capacity = max(results.keys(), 
-                                             key=lambda x: results[x].get('annual_peak_reduction', 0) / (x / 1000))
-                efficiency_value = results[best_efficiency_capacity].get('annual_peak_reduction', 0) / (best_efficiency_capacity / 1000)
+            # 月選択
+            selected_month = st.selectbox(
+                "表示する月",
+                list(range(1, 13)),
+                index=0,
+                format_func=lambda x: f"{x}月",
+                key="selected_month_detail"
+            )
+            
+            # 選択月の日別データ抽出
+            month_daily_data = []
+            for day, result in daily_results.items():
+                # 日から月を計算（簡易版）
+                day_month = annual_comparator._get_month_from_day_simple(day - 1)
+                if day_month == selected_month:
+                    month_daily_data.append({
+                        '日': day,
+                        '日付': f"{selected_month}月{annual_comparator._get_day_in_month_simple(day - 1)}日",
+                        'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
+                        '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
+                        '需要幅改善(kW)': f"{result['range_improvement']:.1f}"
+                    })
+            
+            if month_daily_data:
+                daily_df = pd.DataFrame(month_daily_data)
+                st.dataframe(daily_df, use_container_width=True)
                 
-                st.info(f"""
-                **⚡ 最高効率**
+                # 日別トレンド（選択月）
+                fig_daily = px.line(
+                    daily_df,
+                    x='日付', y='ピーク削減(kW)',
+                    title=f"{selected_month}月の日別ピーク削減トレンド"
+                )
+                fig_daily.update_xaxes(tickangle=45)
+                st.plotly_chart(fig_daily, use_container_width=True)
+            else:
+                st.info(f"{selected_month}月のデータがありません")
+
+
+def show_capacity_recommendation(results, capacity_list):
+    """推奨容量判定タブの内容"""
+    st.subheader("🏆 推奨容量判定")
+    
+    # 推奨容量の総合評価
+    try:
+        best_capacity = None
+        best_score = -1
+        evaluation_results = []
+        
+        for capacity, result in results.items():
+            # 各指標のスコア計算
+            peak_score = result.get('annual_peak_reduction', 0) * 0.3
+            efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25
+            cycle_score = 100 if result.get('annual_cycle_constraint_satisfied', False) else 0
+            seasonal_balance_score = np.std([
+                result['seasonal_stats']['spring']['peak_reduction'],
+                result['seasonal_stats']['summer']['peak_reduction'],
+                result['seasonal_stats']['autumn']['peak_reduction'],
+                result['seasonal_stats']['winter']['peak_reduction']
+            ]) * (-0.2)  # 標準偏差が小さい方が良い
+            
+            total_score = peak_score + efficiency_score + cycle_score * 0.2 + seasonal_balance_score
+            
+            evaluation_results.append({
+                '容量(kWh)': f"{capacity:,}",
+                'ピーク削減スコア': f"{peak_score:.1f}",
+                '容量効率スコア': f"{efficiency_score:.1f}",
+                'サイクル制約スコア': f"{cycle_score * 0.2:.1f}",
+                '季節バランススコア': f"{seasonal_balance_score:.1f}",
+                '総合スコア': f"{total_score:.1f}"
+            })
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_capacity = capacity
+        
+        # 評価結果テーブル
+        st.dataframe(pd.DataFrame(evaluation_results), use_container_width=True)
+        
+        # 推奨容量の詳細
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if best_capacity is not None:
+                st.success(f"""
+                **🥇 総合推奨容量**
                 
-                **{best_efficiency_capacity:,}kWh**
+                **{best_capacity:,}kWh**
                 
-                容量効率: {efficiency_value:.2f}kW/MWh
+                総合スコア: {best_score:.1f}点
                 
-                特徴:
-                - 投資効率が最も良好
-                - コストパフォーマンス重視
+                推奨理由:
+                - 年間通して安定した効果
+                - 容量効率が優秀
+                - サイクル制約を満足
                 """)
         
-        except Exception as e:
-            st.error(f"推奨容量判定エラー: {e}")
+        with col2:
+            # 最大ピーク削減容量
+            best_peak_capacity = max(results.keys(), 
+                                   key=lambda x: results[x].get('annual_peak_reduction', 0))
+            peak_value = results[best_peak_capacity].get('annual_peak_reduction', 0)
+            
+            st.info(f"""
+            **📈 最大ピーク削減**
+            
+            **{best_peak_capacity:,}kWh**
+            
+            年間ピーク削減: {peak_value:.1f}kW
+            
+            特徴:
+            - 最大需要の大幅削減
+            - 電力契約容量削減効果大
+            """)
+        
+        with col3:
+            # 最高効率容量
+            best_efficiency_capacity = max(results.keys(), 
+                                         key=lambda x: results[x].get('annual_peak_reduction', 0) / (x / 1000))
+            efficiency_value = results[best_efficiency_capacity].get('annual_peak_reduction', 0) / (best_efficiency_capacity / 1000)
+            
+            st.info(f"""
+            **⚡ 最高効率**
+            
+            **{best_efficiency_capacity:,}kWh**
+            
+            容量効率: {efficiency_value:.2f}kW/MWh
+            
+            特徴:
+            - 投資効率が最も良好
+            - コストパフォーマンス重視
+            """)
     
-    # ダウンロードセクション
+    except Exception as e:
+        st.error(f"推奨容量判定エラー: {e}")
+
+
+def show_download_section(summary_df, results, annual_comparator):
+    """ダウンロードセクション"""
     st.header("4. 結果ダウンロード")
     
     col1, col2, col3 = st.columns(3)
@@ -1780,48 +1764,5 @@ def display_annual_results():
                 st.error(f"季節別CSV生成エラー: {e}")
 
 
-# デバッグ機能
-def debug_annual_test():
-    """年間データ用デバッグ機能"""
-    st.sidebar.header("🔧 年間デバッグモード")
-    
-    if st.sidebar.button("年間テストデータ生成", key="debug_generate_data"):
-        with st.sidebar:
-            with st.spinner("年間テストデータ生成中..."):
-                # 簡易年間データ生成
-                np.random.seed(42)
-                base_demand = 5000
-                
-                annual_test_data = []
-                for day in range(365):
-                    # 季節変動
-                    seasonal_factor = 1 + 0.2 * np.sin(2 * np.pi * day / 365 - np.pi/2)
-                    
-                    # 日内パターン
-                    daily_pattern = []
-                    for hour in range(24):
-                        for quarter in range(4):
-                            time_factor = 1 + 0.3 * np.sin(2 * np.pi * (hour + quarter/4) / 24 - np.pi/3)
-                            noise = np.random.normal(0, 0.05)
-                            demand = base_demand * seasonal_factor * time_factor * (1 + noise)
-                            daily_pattern.append(max(demand, base_demand * 0.5))
-                    
-                    annual_test_data.extend(daily_pattern)
-                
-                st.session_state.annual_test_demand = np.array(annual_test_data)
-                st.sidebar.success(f"年間テストデータ生成完了: {len(annual_test_data):,}ステップ")
-    
-    if hasattr(st.session_state, 'annual_test_demand'):
-        if st.sidebar.button("テストデータを年間データに適用", key="debug_apply_data"):
-            st.session_state.annual_demand = st.session_state.annual_test_demand
-            st.session_state.simulation_stage = 'simulation_config'
-            st.sidebar.success("年間テストデータを適用しました")
-            st.rerun()
-
-
 if __name__ == "__main__":
-    # デバッグモードの表示
-    if st.sidebar.checkbox("🔧 年間デバッグモード", value=False, key="debug_mode_checkbox"):
-        debug_annual_test()
-    
     main()
