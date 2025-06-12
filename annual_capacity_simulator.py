@@ -44,25 +44,98 @@ class AnnualBatteryCapacityComparator:
     def __init__(self):
         self.comparison_results = {}
         self.monthly_results = {}
-    
+        
     def validate_annual_data(self, demand_forecast):
         """年間データの検証"""
-        # 既存のコード...
-        return demand_array[:expected_steps]
+        if not isinstance(demand_forecast, (list, np.ndarray)):
+            raise ValueError("demand_forecast は配列である必要があります")
+        
+        demand_array = np.array(demand_forecast)
+        expected_steps = 365 * 96  # 35,040ステップ
+        
+        if len(demand_array) < expected_steps:
+            if len(demand_array) >= 96:
+                # 日単位データの場合、年間に拡張
+                days_available = len(demand_array) // 96
+                if days_available < 7:
+                    raise ValueError(f"最低7日分のデータが必要です（現在: {days_available}日分）")
+                
+                # 週単位パターンで年間拡張
+                weekly_pattern = demand_array[:days_available*96]
+                extended_data = []
+                
+                for week in range(53):  # 年間53週
+                    if len(extended_data) + len(weekly_pattern) <= expected_steps:
+                        extended_data.extend(weekly_pattern)
+                    else:
+                        remaining = expected_steps - len(extended_data)
+                        extended_data.extend(weekly_pattern[:remaining])
+                        break
+                
+                demand_array = np.array(extended_data)
+                st.info(f"データを{days_available}日パターンから年間{len(demand_array)}ステップに拡張しました")
+            else:
+                raise ValueError(f"データが不足しています（現在: {len(demand_array)}、必要: {expected_steps}）")
+        
+        # NaN値の処理
+        if np.any(np.isnan(demand_array)):
+            nan_count = np.sum(np.isnan(demand_array))
+            st.warning(f"年間データにNaN値が{nan_count:,}個含まれています。補間処理を実行します。")
+            
+            # 線形補間でNaN値を埋める
+            mask = ~np.isnan(demand_array)
+            if np.sum(mask) == 0:
+                raise ValueError("すべてのデータがNaN値です")
+            
+            indices = np.arange(len(demand_array))
+            demand_array[~mask] = np.interp(indices[~mask], indices[mask], demand_array[mask])
+        
+        return demand_array[:expected_steps]  # 必要なステップ数に切り取り
     
     def create_daily_batches(self, annual_demand):
         """年間データを日別バッチに分割"""
-        # 既存のコード...
+        daily_batches = []
+        
+        for day in range(365):
+            start_idx = day * 96
+            end_idx = start_idx + 96
+            if end_idx <= len(annual_demand):
+                daily_data = annual_demand[start_idx:end_idx]
+                
+                # 月を計算
+                month = self._get_month_from_day(day)
+                
+                daily_batches.append({
+                    'day': day + 1,
+                    'month': month,
+                    'day_name': f"{month}月{self._get_day_in_month(day)}日",
+                    'data': daily_data,
+                    'start_idx': start_idx,
+                    'end_idx': end_idx
+                })
+            else:
+                break
+        
         return daily_batches
     
     def _get_month_from_day(self, day_of_year):
         """年間通算日から月を取得"""
-        # 既存のコード...
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            cumulative_days += days
+            if day_of_year < cumulative_days:
+                return month + 1
         return 12
     
     def _get_day_in_month(self, day_of_year):
         """年間通算日から月内日付を取得"""
-        # 既存のコード...
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            if day_of_year < cumulative_days + days:
+                return day_of_year - cumulative_days + 1
+            cumulative_days += days
         return 31
     
     def run_daily_simulation_with_soc(self, daily_data, capacity, max_power, 
