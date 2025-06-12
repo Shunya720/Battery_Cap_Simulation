@@ -1650,7 +1650,51 @@ def show_soc_analysis(results, capacity_list):
             st.metric("平均SOC", f"{soc_stats.get('soc_average', 50):.1f}%")
         
         # 年間SOC推移グラフ
-        st.subheader("年間SOC推移")
+            st.subheader("SOC統計比較")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # SOC変化の比較
+        soc_change_data = []
+        for capacity, result in results.items():
+            soc_stats = result.get('soc_stats', {})
+            soc_change = soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50)
+            soc_change_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'soc_change': soc_change,
+                'soc_change_abs': abs(soc_change)
+            })
+        
+        fig_soc_change = px.bar(
+            pd.DataFrame(soc_change_data),
+            x='capacity', y='soc_change',
+            title="容量別年間SOC変化（SOC引き継ぎ）",
+            color='soc_change',
+            color_continuous_scale='RdYlGn_r'
+        )
+        fig_soc_change.add_hline(y=0, line_dash="dash", line_color="black")
+        st.plotly_chart(fig_soc_change, use_container_width=True)
+    
+    with col2:
+        # SOC変動範囲の比較
+        soc_range_data = []
+        for capacity, result in results.items():
+            soc_stats = result.get('soc_stats', {})
+            soc_range_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'soc_range': soc_stats.get('soc_range', 0),
+                'avg_soc': soc_stats.get('soc_average', 50)
+            })
+        
+        fig_soc_range = px.bar(
+            pd.DataFrame(soc_range_data),
+            x='capacity', y='soc_range',
+            title="容量別SOC変動範囲（SOC引き継ぎ）",
+            color='avg_soc',
+            color_continuous_scale='Viridis'
+        )
+        st.plotly_chart(fig_soc_range, use_container_width=True)
         
         # SOCプロファイルのサンプリング（表示用）
         soc_profile = result.get('soc_profile', [])
