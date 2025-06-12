@@ -564,11 +564,11 @@ def show_data_upload_section():
     """データアップロードセクション"""
     st.header("1. 年間需要予測データアップロード")
     
-        st.subheader("年間需要予測CSVアップロード")
-        uploaded_file = st.file_uploader(
-            "年間需要予測CSV（35,040ステップ推奨、15分間隔）", 
-            type=['csv'],
-            help="365日×96ステップ/日=35,040ステップの年間データ、または7日以上の短期データ（年間拡張します）"
+    st.subheader("年間需要予測CSVアップロード")
+    uploaded_file = st.file_uploader(
+    "年間需要予測CSV（35,040ステップ推奨、15分間隔）", 
+    type=['csv'],
+    help="365日×96ステップ/日=35,040ステップの年間データ、または7日以上の短期データ（年間拡張します）"
         )
         
         if uploaded_file is not None:
