@@ -1109,11 +1109,11 @@ def get_default_generator_config(index: int) -> dict:
             "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
         4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
             "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
-        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
+        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
+        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
+        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
     }
     
@@ -1136,11 +1136,11 @@ def main():
             "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
         4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
             "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
-        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
+        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
+        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
+        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
     }
     
