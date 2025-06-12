@@ -242,18 +242,18 @@ class BatterySOCManager:
             self.current_soc = soc
     
     def reset_simulation(self, initial_soc: Optional[float] = None):
-        """シミュレーションリセット"""
+        """シミュレーションリセット（動的SOC対応）"""
         if initial_soc is not None:
             self.initial_soc = initial_soc
+            self.current_soc = initial_soc  # ← 現在SOCも更新
         
         self.confirmed_battery_output = np.full(96, np.nan)
         self.confirmed_soc_profile = np.full(96, np.nan)
-        self.confirmed_soc_profile[0] = self.initial_soc
-        self.current_soc = self.initial_soc
+        self.confirmed_soc_profile[0] = self.initial_soc  # ← 更新されたSOCを使用
 
 
 class DemandSmoothnessOptimizer:
-    """需要滑らかさ特化型自動最適化クラス（ギザギザ最小化重視・分離制御対応）"""
+    """需要滑らかさ特化型自動最適化クラス（平準化重視・分離制御対応）"""
     
     def __init__(self, peak_bottom_optimizer_class, soc_manager_class, 
                  battery_capacity=48000, max_power=3000):
@@ -268,7 +268,7 @@ class DemandSmoothnessOptimizer:
         
     def calculate_demand_smoothness_metrics(self, demand_original: np.ndarray, 
                                           demand_after_control: np.ndarray) -> Dict:
-        """需要滑らかさの詳細計算（ギザギザ最小化重視）"""
+        """需要滑らかさの詳細計算（平準化重視）"""
         
         # 1. 隣接ステップ間の差分（ギザギザ度）
         diff_original = np.abs(np.diff(demand_original))
@@ -348,7 +348,7 @@ class DemandSmoothnessOptimizer:
     
     def objective_function_smoothness_focused(self, params: List[float], demand_forecast: np.ndarray, 
                                             cycle_target=48000, cycle_tolerance=1500) -> float:
-        """需要滑らかさ特化型目的関数（ギザギザ最小化最優先・分離制御対応）"""
+        """需要滑らかさ特化型目的関数（平準化最優先・分離制御対応）"""
         try:
             # パラメータ取得（5次元に拡張）
             peak_percentile = max(50, min(100, params[0]))
@@ -445,8 +445,8 @@ class DemandSmoothnessOptimizer:
     
     def optimize_for_demand_smoothness(self, demand_forecast: np.ndarray, cycle_target=48000, 
                                      cycle_tolerance=1500, method='optuna', n_trials=100) -> Union[optuna.Study, object]:
-        """需要滑らかさのための最適化実行（ギザギザ最小化重視）"""
-        print(f"🎯 需要滑らかさ最適化開始（ギザギザ最小化重視）")
+        """需要滑らかさのための最適化実行（平準化重視）"""
+        print(f"🎯 需要滑らかさ最適化開始（平準化重視）")
         print(f"   サイクル目標: {cycle_target:,} ± {cycle_tolerance:,} kWh")
         print(f"   最適化手法: {method}")
         
@@ -569,13 +569,13 @@ class DemandSmoothnessOptimizer:
         }
     
     def generate_optimization_report(self, demand_forecast: np.ndarray) -> str:
-        """滑らかさ最適化レポート生成（ギザギザ最小化重視・分離制御対応）"""
+        """滑らかさ最適化レポート生成（平準化重視・分離制御対応）"""
         if self.best_result is None:
             return "最適化が実行されていません"
         
         report = []
         report.append("=" * 70)
-        report.append("🎯 需要滑らかさ最適化レポート（ギザギザ最小化重視・分離制御対応）")
+        report.append("🎯 需要滑らかさ最適化レポート（平準化重視・分離制御対応）")
         report.append("=" * 70)
         
         # 最適パラメータ
@@ -598,7 +598,7 @@ class DemandSmoothnessOptimizer:
         
         # 滑らかさ効果
         metrics = self.best_result['smoothness_metrics']
-        report.append(f"\n📈 滑らかさ効果（ギザギザ最小化）:")
+        report.append(f"\n📈 滑らかさ効果（平準化）:")
         report.append(f"  隣接変動改善: {metrics['smoothness_improvement']*100:.1f}%")
         report.append(f"    → 変動合計: {metrics['diff_original_sum']:.1f}kW → {metrics['diff_after_sum']:.1f}kW")
         
@@ -693,11 +693,11 @@ def create_time_series(start_time: datetime, steps=96) -> List[datetime]:
 class BatteryControlEngine:
     """バッテリー制御エンジン - メイン処理クラス"""
     
-    def __init__(self, battery_capacity=48000, max_power=3000, efficiency=1.0, initial_soc=4.5):
+    def __init__(self, battery_capacity=48000, max_power=3000, efficiency=1.0, initial_soc=50.0):
         self.battery_capacity = battery_capacity
         self.max_power = max_power
         self.efficiency = efficiency
-        self.initial_soc = initial_soc
+        self.initial_soc = initial_soc  # ← 可変値として保持
         
         # コアコンポーネント
         self.peak_bottom_optimizer = None
@@ -709,17 +709,32 @@ class BatteryControlEngine:
         self.current_step = -1
         self.actual_data = np.full(96, np.nan)
         self.original_forecast = None
-        
+    
+    def set_initial_soc(self, soc_percent):
+        """初期SOC設定メソッド（年間シミュレーションから呼び出し用）"""
+        self.initial_soc = soc_percent
+        # 既存のSOCマネージャーがあれば更新
+        if self.soc_manager:
+            self.soc_manager.initial_soc = soc_percent
+            self.soc_manager.current_soc = soc_percent
+            # SOCプロファイルの最初の値も更新
+            if hasattr(self.soc_manager, 'confirmed_soc_profile'):
+                self.soc_manager.confirmed_soc_profile[0] = soc_percent
+    
     def initialize_components(self, **params):
-        """コンポーネント初期化"""
+        """コンポーネント初期化（動的SOC対応）"""
         self.peak_bottom_optimizer = PeakBottomOptimizer(
             battery_capacity=self.battery_capacity,
             max_power=self.max_power,
             **params
         )
         
+        # SOCマネージャーを動的SOCで初期化
         self.soc_manager = BatterySOCManager(
-            self.battery_capacity, self.max_power, self.efficiency, self.initial_soc
+            self.battery_capacity, 
+            self.max_power, 
+            self.efficiency, 
+            self.initial_soc  # ← 動的な値を使用
         )
         
         self.smoothness_optimizer = DemandSmoothnessOptimizer(
