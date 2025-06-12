@@ -18,7 +18,6 @@ def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_
             
             start_idx = 0
             for month in range(1, 13):
-                
             else:
                 seasonal_stats[season_name] = {
                     'peak_reduction': 0,
