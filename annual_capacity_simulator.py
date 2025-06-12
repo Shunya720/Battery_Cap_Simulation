@@ -14,6 +14,8 @@ import warnings
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
+from plotly.subplots import make_subplots
+
 warnings.filterwarnings('ignore')
 
 # コアロジック読み込み（エラーハンドリング追加）
@@ -1155,7 +1157,7 @@ def display_annual_results():
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["年間需要比較", "SOC推移分析", "季節別分析", "月別詳細", "推奨容量"])
     
     with tab1:
-        show_annual_demand_comparison(results, capacity_list, annual_demand)
+        (results, capacity_list, annual_demand)
     
     with tab2:
         show_soc_analysis(results, capacity_list)
@@ -1177,8 +1179,8 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
     """年間需要比較タブの内容（SOC引き継ぎ対応）"""
     st.subheader("年間需要カーブ比較")
     
-    # グラフ表示期間選択
-    col1, col2, col3 = st.columns(3)
+    # === 変更1: グラフ表示期間選択部分 ===
+    col1, col2, col3, col4 = st.columns(4)  # 3列から4列に変更
     with col1:
         graph_period = st.selectbox(
             "表示期間",
@@ -1207,6 +1209,16 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
             format_func=lambda x: f"{x:,}kWh",
             key="selected_capacity_graph"
         )
+    
+    # === 追加: SOC表示オプション ===
+    with col4:
+        show_soc = st.checkbox(
+            "SOC推移を表示",
+            value=True,
+            help="需要グラフと一緒にSOC推移を表示",
+            key="show_soc_checkbox"
+        )
+
     
     # データ期間とサンプリング設定
     try:
@@ -1246,8 +1258,10 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
             
             if selected_capacity_graph in results:
                 period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
+                period_soc = results[selected_capacity_graph]['soc_profile'][start_idx:end_idx]  # SOC追加
             else:
                 period_controlled = period_demand  # フォールバック
+                period_soc = np.full(len(period_demand), 50)  # デフォルトSOC
             
             # 時系列作成
             time_series = create_annual_time_series()
@@ -1258,40 +1272,111 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
             
             if selected_capacity_graph in results:
                 period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
+                period_soc = results[selected_capacity_graph]['soc_profile'][sample_indices]  # SOC追加
             else:
                 period_controlled = period_demand
+                period_soc = np.full(len(period_demand), 50)  # デフォルトSOC
             
             time_series = create_annual_time_series()
             period_times = [time_series[i] for i in sample_indices]
         
         # 需要比較グラフ
-        fig_demand = go.Figure()
-        
-        # 元需要予測
-        fig_demand.add_trace(go.Scatter(
-            x=period_times,
-            y=period_demand,
-            name="元需要予測",
-            line=dict(color="lightblue", width=2),
-            opacity=0.8
-        ))
-        
-        # 電池制御後需要
-        fig_demand.add_trace(go.Scatter(
-            x=period_times,
-            y=period_controlled,
-            name=f"電池制御後（{selected_capacity_graph:,}kWh・SOC引き継ぎ）",
-            line=dict(color="red", width=2)
-        ))
-        
-        fig_demand.update_layout(
-            title=f"需要カーブ比較 - {period_title}（SOC引き継ぎ対応）",
-            xaxis_title="日時",
-            yaxis_title="需要 (kW)",
-            height=500,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-            hovermode='x unified'
-        )
+        if show_soc:
+            # サブプロット作成（需要とSOCを縦に並べる）
+            fig_demand = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                subplot_titles=[
+                    f"需要カーブ比較 - {period_title}（SOC引き継ぎ対応）",
+                    f"SOC推移 - 容量{selected_capacity_graph:,}kWh"
+                ],
+                specs=[[{"secondary_y": False}],
+                       [{"secondary_y": False}]]
+            )
+            
+            # 上段：需要データ
+            fig_demand.add_trace(
+                go.Scatter(
+                    x=period_times,
+                    y=period_demand,
+                    name="元需要予測",
+                    line=dict(color="lightblue", width=2),
+                    opacity=0.8
+                ),
+                row=1, col=1
+            )
+            
+            fig_demand.add_trace(
+                go.Scatter(
+                    x=period_times,
+                    y=period_controlled,
+                    name=f"電池制御後（{selected_capacity_graph:,}kWh）",
+                    line=dict(color="red", width=2)
+                ),
+                row=1, col=1
+            )
+            
+            # 下段：SOCデータ
+            fig_demand.add_trace(
+                go.Scatter(
+                    x=period_times,
+                    y=period_soc,
+                    name="SOC推移",
+                    line=dict(color="green", width=2),
+                    fill='tonexty',
+                    fillcolor='rgba(0,255,0,0.1)'
+                ),
+                row=2, col=1
+            )
+            
+            # SOC限界値の表示
+            fig_demand.add_hline(y=90, line_dash="dash", line_color="red", 
+                               annotation_text="SOC上限(90%)", row=2, col=1)
+            fig_demand.add_hline(y=10, line_dash="dash", line_color="red", 
+                               annotation_text="SOC下限(10%)", row=2, col=1)
+            fig_demand.add_hline(y=50, line_dash="dot", line_color="gray", 
+                               annotation_text="SOC中央(50%)", row=2, col=1)
+            
+            # レイアウト更新
+            fig_demand.update_xaxes(title_text="日時", row=2, col=1)
+            fig_demand.update_yaxes(title_text="需要 (kW)", row=1, col=1)
+            fig_demand.update_yaxes(title_text="SOC (%)", range=[0, 100], row=2, col=1)
+            
+            fig_demand.update_layout(
+                height=800,
+                hovermode='x unified',
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
+        else:
+            # 従来の需要のみグラフ
+            fig_demand = go.Figure()
+            
+            # 元需要予測
+            fig_demand.add_trace(go.Scatter(
+                x=period_times,
+                y=period_demand,
+                name="元需要予測",
+                line=dict(color="lightblue", width=2),
+                opacity=0.8
+            ))
+            
+            # 電池制御後需要
+            fig_demand.add_trace(go.Scatter(
+                x=period_times,
+                y=period_controlled,
+                name=f"電池制御後（{selected_capacity_graph:,}kWh・SOC引き継ぎ）",
+                line=dict(color="red", width=2)
+            ))
+            
+            fig_demand.update_layout(
+                title=f"需要カーブ比較 - {period_title}（SOC引き継ぎ対応）",
+                xaxis_title="日時",
+                yaxis_title="需要 (kW)",
+                height=500,
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                hovermode='x unified'
+            )
         
         st.plotly_chart(fig_demand, use_container_width=True)
         
@@ -1320,53 +1405,144 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
                 st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
         
         # 全容量比較グラフ（年間データのサンプル表示）
-        st.subheader("全容量比較（年間サンプル・SOC引き継ぎ対応）")
+       # 表示オプション
+        col1, col2 = st.columns(2)
+        with col1:
+            comparison_mode = st.radio(
+                "比較表示モード",
+                ["需要のみ", "需要+SOC"],
+                index=0,
+                key="comparison_mode_select"
+            )
+        with col2:
+            if comparison_mode == "需要+SOC":
+                soc_capacity = st.selectbox(
+                    "SOC表示する容量",
+                    capacity_list,
+                    index=0,
+                    format_func=lambda x: f"{x:,}kWh",
+                    key="soc_display_capacity"
+                )
         
         # データサンプリング（表示用）
         sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
         sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
         
-        fig_annual = go.Figure()
-        
         # サンプル時系列作成
         time_series = create_annual_time_series()
         sample_times = [time_series[i] for i in sample_indices]
         
-        # 元需要
-        fig_annual.add_trace(go.Scatter(
-            x=sample_times,
-            y=annual_demand[sample_indices],
-            name="元需要予測",
-            line=dict(color="lightgray", width=1),
-            opacity=0.8
-        ))
-        
-        # 各容量の制御後需要
-        colors = ['red', 'blue', 'green', 'orange', 'purple']
-        for i, (capacity, result) in enumerate(results.items()):
+        if comparison_mode == "需要のみ":
+            # 需要のみの比較グラフ
+            fig_annual = go.Figure()
+            
+            # 元需要
             fig_annual.add_trace(go.Scatter(
                 x=sample_times,
-                y=result['demand_after_control'][sample_indices],
-                name=f"容量{capacity:,}kWh制御後（SOC引き継ぎ）",
-                line=dict(color=colors[i % len(colors)], width=2)
+                y=annual_demand[sample_indices],
+                name="元需要予測",
+                line=dict(color="lightgray", width=1),
+                opacity=0.8
             ))
-        
-        fig_annual.update_layout(
-            title="年間需要平準化効果比較（全容量・SOC引き継ぎ・サンプル表示）",
-            xaxis_title="日時",
-            yaxis_title="需要 (kW)",
-            height=600,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-        )
+            
+            # 各容量の制御後需要
+            colors = ['red', 'blue', 'green', 'orange', 'purple']
+            for i, (capacity, result) in enumerate(results.items()):
+                fig_annual.add_trace(go.Scatter(
+                    x=sample_times,
+                    y=result['demand_after_control'][sample_indices],
+                    name=f"容量{capacity:,}kWh制御後（SOC引き継ぎ）",
+                    line=dict(color=colors[i % len(colors)], width=2)
+                ))
+            
+            fig_annual.update_layout(
+                title="年間需要平準化効果比較（全容量・SOC引き継ぎ・サンプル表示）",
+                xaxis_title="日時",
+                yaxis_title="需要 (kW)",
+                height=600,
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
+        else:
+            # 需要+SOCの比較グラフ（サブプロット）
+            fig_annual = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                subplot_titles=[
+                    "年間需要平準化効果比較（全容量・SOC引き継ぎ）",
+                    f"SOC推移 - 容量{soc_capacity:,}kWh（年間サンプル）"
+                ],
+                specs=[[{"secondary_y": False}],
+                       [{"secondary_y": False}]]
+            )
+            
+            # 上段：需要データ
+            fig_annual.add_trace(
+                go.Scatter(
+                    x=sample_times,
+                    y=annual_demand[sample_indices],
+                    name="元需要予測",
+                    line=dict(color="lightgray", width=1),
+                    opacity=0.8
+                ),
+                row=1, col=1
+            )
+            
+            # 各容量の制御後需要
+            colors = ['red', 'blue', 'green', 'orange', 'purple']
+            for i, (capacity, result) in enumerate(results.items()):
+                fig_annual.add_trace(
+                    go.Scatter(
+                        x=sample_times,
+                        y=result['demand_after_control'][sample_indices],
+                        name=f"容量{capacity:,}kWh制御後",
+                        line=dict(color=colors[i % len(colors)], width=2)
+                    ),
+                    row=1, col=1
+                )
+            
+            # 下段：選択容量のSOCデータ
+            if soc_capacity in results:
+                soc_data = results[soc_capacity]['soc_profile'][sample_indices]
+                fig_annual.add_trace(
+                    go.Scatter(
+                        x=sample_times,
+                        y=soc_data,
+                        name=f"SOC推移（{soc_capacity:,}kWh）",
+                        line=dict(color="green", width=2),
+                        fill='tonexty',
+                        fillcolor='rgba(0,255,0,0.1)'
+                    ),
+                    row=2, col=1
+                )
+                
+                # SOC限界値の表示
+                fig_annual.add_hline(y=90, line_dash="dash", line_color="red", 
+                                   annotation_text="SOC上限(90%)", row=2, col=1)
+                fig_annual.add_hline(y=10, line_dash="dash", line_color="red", 
+                                   annotation_text="SOC下限(10%)", row=2, col=1)
+                fig_annual.add_hline(y=50, line_dash="dot", line_color="gray", 
+                                   annotation_text="SOC中央(50%)", row=2, col=1)
+            
+            # レイアウト更新
+            fig_annual.update_xaxes(title_text="日時", row=2, col=1)
+            fig_annual.update_yaxes(title_text="需要 (kW)", row=1, col=1)
+            fig_annual.update_yaxes(title_text="SOC (%)", range=[0, 100], row=2, col=1)
+            
+            fig_annual.update_layout(
+                height=800,
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
         
         st.plotly_chart(fig_annual, use_container_width=True)
-        
+
     except Exception as e:
         st.error(f"年間グラフ作成エラー: {e}")
         import traceback
         st.text(traceback.format_exc())
     
     # 年間統計
+    st.subheader("年間統計とSOC分析")  # タイトル変更
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -1442,7 +1618,52 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         )
         st.plotly_chart(fig_cycles, use_container_width=True)
 
-
+    st.subheader("SOC統計比較")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # SOC変化の比較
+        soc_change_data = []
+        for capacity, result in results.items():
+            soc_stats = result.get('soc_stats', {})
+            soc_change = soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50)
+            soc_change_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'soc_change': soc_change,
+                'soc_change_abs': abs(soc_change)
+            })
+        
+        fig_soc_change = px.bar(
+            pd.DataFrame(soc_change_data),
+            x='capacity', y='soc_change',
+            title="容量別年間SOC変化（SOC引き継ぎ）",
+            color='soc_change',
+            color_continuous_scale='RdYlGn_r'
+        )
+        fig_soc_change.add_hline(y=0, line_dash="dash", line_color="black")
+        st.plotly_chart(fig_soc_change, use_container_width=True)
+    
+    with col2:
+        # SOC変動範囲の比較
+        soc_range_data = []
+        for capacity, result in results.items():
+            soc_stats = result.get('soc_stats', {})
+            soc_range_data.append({
+                'capacity': f"{capacity:,}kWh",
+                'soc_range': soc_stats.get('soc_range', 0),
+                'avg_soc': soc_stats.get('soc_average', 50)
+            })
+        
+        fig_soc_range = px.bar(
+            pd.DataFrame(soc_range_data),
+            x='capacity', y='soc_range',
+            title="容量別SOC変動範囲（SOC引き継ぎ）",
+            color='avg_soc',
+            color_continuous_scale='Viridis'
+        )
+        st.plotly_chart(fig_soc_range, use_container_width=True)
+        
 def show_soc_analysis(results, capacity_list):
     """SOC推移分析タブの内容"""
     st.subheader("🔋 SOC推移分析")
