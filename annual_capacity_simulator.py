@@ -1,5 +1,5 @@
 """
-年間容量シミュレーション専用アプリケーション（デバッグ版）
+年間容量シミュレーション専用アプリケーション（SOC引き継ぎ対応版）
 複数容量での年間需要平準化効果比較を実行
 """
 
@@ -37,7 +37,7 @@ except SyntaxError as e:
 
 
 class AnnualBatteryCapacityComparator:
-    """年間バッテリー容量別シミュレーション比較クラス"""
+    """年間バッテリー容量別シミュレーション比較クラス（SOC引き継ぎ対応）"""
     
     def __init__(self):
         self.comparison_results = {}
@@ -53,7 +53,121 @@ class AnnualBatteryCapacityComparator:
         
         if len(demand_array) < expected_steps:
             if len(demand_array) >= 96:
-                # 日単位データの場合、年間に拡張
+                # 月別トレンド
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                monthly_peak_data = []
+                for month in range(1, 13):
+                    if month in monthly_summary:
+                        monthly_peak_data.append({
+                            'month': month_names[month-1],
+                            'peak_reduction': monthly_summary[month]['peak_reduction']
+                        })
+                
+                if monthly_peak_data:
+                    fig_monthly_peak = px.line(
+                        pd.DataFrame(monthly_peak_data),
+                        x='month', y='peak_reduction',
+                        title=f"月別ピーク削減トレンド（容量{selected_capacity:,}kWh・SOC引き継ぎ）"
+                    )
+                    st.plotly_chart(fig_monthly_peak, use_container_width=True)
+            
+            with col2:
+                monthly_soc_data = []
+                for month in range(1, 13):
+                    if month in monthly_summary:
+                        monthly_soc_data.append({
+                            'month': month_names[month-1],
+                            'month_end_soc': monthly_summary[month].get('month_end_soc', 50)
+                        })
+                
+                if monthly_soc_data:
+                    fig_monthly_soc = px.line(
+                        pd.DataFrame(monthly_soc_data),
+                        x='month', y='month_end_soc',
+                        title=f"月別SOC推移（容量{selected_capacity:,}kWh）"
+                    )
+                    fig_monthly_soc.update_yaxes(range=[0, 100])
+                    st.plotly_chart(fig_monthly_soc, use_container_width=True)
+        
+        elif detail_mode == "日別詳細" and 'daily_results' in results[selected_capacity]:
+            # 日別詳細表示（SOC情報追加）
+            daily_results = results[selected_capacity]['daily_results']
+            
+            # 月選択
+            selected_month = st.selectbox(
+                "表示する月",
+                list(range(1, 13)),
+                index=0,
+                format_func=lambda x: f"{x}月",
+                key="selected_month_detail"
+            )
+            
+            # 選択月の日別データ抽出
+            month_daily_data = []
+            for day, result in daily_results.items():
+                # 日から月を計算（簡易版）
+                day_month = annual_comparator._get_month_from_day(day - 1)
+                if day_month == selected_month:
+                    month_daily_data.append({
+                        '日': day,
+                        '日付': f"{selected_month}月{annual_comparator._get_day_in_month(day - 1)}日",
+                        'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
+                        '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
+                        '需要幅改善(kW)': f"{result['range_improvement']:.1f}",
+                        '初期SOC(%)': f"{result.get('initial_soc', 50):.1f}",
+                        '最終SOC(%)': f"{result.get('final_soc', 50):.1f}",
+                        'SOC変化': f"{result.get('final_soc', 50) - result.get('initial_soc', 50):+.1f}"
+                    })
+            
+            if month_daily_data:
+                daily_df = pd.DataFrame(month_daily_data)
+                st.dataframe(daily_df, use_container_width=True)
+                
+                # 日別トレンド（選択月）
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig_daily_peak = px.line(
+                        daily_df,
+                        x='日付', y='ピーク削減(kW)',
+                        title=f"{selected_month}月の日別ピーク削減トレンド"
+                    )
+                    fig_daily_peak.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig_daily_peak, use_container_width=True)
+                
+                with col2:
+                    # SOC変化のグラフ
+                    fig_daily_soc = go.Figure()
+                    
+                    # 初期SOCと最終SOCをプロット
+                    fig_daily_soc.add_trace(go.Scatter(
+                        x=daily_df['日付'],
+                        y=pd.to_numeric(daily_df['初期SOC(%)'].str.replace('%', '')),
+                        name="初期SOC",
+                        line=dict(color="blue", width=2)
+                    ))
+                    
+                    fig_daily_soc.add_trace(go.Scatter(
+                        x=daily_df['日付'],
+                        y=pd.to_numeric(daily_df['最終SOC(%)'].str.replace('%', '')),
+                        name="最終SOC",
+                        line=dict(color="red", width=2)
+                    ))
+                    
+                    fig_daily_soc.update_layout(
+                        title=f"{selected_month}月の日別SOC推移",
+                        xaxis_title="日付",
+                        yaxis_title="SOC (%)",
+                        yaxis=dict(range=[0, 100])
+                    )
+                    fig_daily_soc.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig_daily_soc, use_container_width=True)
+            else:
+                st.info(f"{selected_month}月のデータがありません")
+                
+    日単位データの場合、年間に拡張
                 days_available = len(demand_array) // 96
                 if days_available < 7:
                     raise ValueError(f"最低7日分のデータが必要です（現在: {days_available}日分）")
@@ -136,19 +250,28 @@ class AnnualBatteryCapacityComparator:
             cumulative_days += days
         return 31
     
-    def run_daily_simulation(self, daily_data, capacity, max_power, 
-                           daily_cycle_target, cycle_tolerance, optimization_trials):
-        """日別シミュレーション実行（1日=96ステップ）"""
+    def run_daily_simulation_with_soc(self, daily_data, capacity, max_power, 
+                                    daily_cycle_target, cycle_tolerance, optimization_trials,
+                                    initial_soc=50.0):
+        """SOC引き継ぎ対応日別シミュレーション実行（1日=96ステップ）"""
         try:
             if not CORE_LOGIC_AVAILABLE:
-                return self._create_dummy_daily_result(daily_data, capacity, max_power, daily_cycle_target)
+                return self._create_dummy_daily_result_with_soc(daily_data, capacity, max_power, 
+                                                              daily_cycle_target, initial_soc)
             
+            # バッテリーエンジンの初期化（SOC指定対応）
             engine = BatteryControlEngine(
                 battery_capacity=capacity,
                 max_power=max_power
             )
             
-            # 日別最適化実行（コアロジックの設計仕様に合致）
+            # SOC初期値を設定（エンジンがサポートしている場合）
+            if hasattr(engine, 'set_initial_soc'):
+                engine.set_initial_soc(initial_soc)
+            elif hasattr(engine, 'soc_manager') and hasattr(engine.soc_manager, 'current_soc'):
+                engine.soc_manager.current_soc = initial_soc
+            
+            # 日別最適化実行
             if OPTIMIZATION_AVAILABLE:
                 optimization_result = engine.run_optimization(
                     daily_data,  # 96ステップの日別データ
@@ -184,29 +307,40 @@ class AnnualBatteryCapacityComparator:
             # 安全な配列アクセス
             battery_output = control_result.get('battery_output', np.zeros(len(daily_data)))
             demand_after_battery = control_result.get('demand_after_battery', daily_data)
+            soc_profile = control_result.get('soc_profile', np.linspace(initial_soc, initial_soc, len(daily_data)))
+            
+            # 最終SOCを取得
+            final_soc = soc_profile[-1] if len(soc_profile) > 0 else initial_soc
             
             return {
                 'optimized_params': optimized_params,
                 'battery_output': battery_output,
-                'soc_profile': control_result.get('soc_profile', np.zeros(len(daily_data))),
+                'soc_profile': soc_profile,
                 'demand_after_control': demand_after_battery,
                 'control_info': control_result.get('control_info', {}),
                 'daily_discharge': -np.sum(battery_output[battery_output < 0]) if len(battery_output) > 0 else 0,
                 'peak_reduction': np.max(daily_data) - np.max(demand_after_battery) if len(demand_after_battery) > 0 else 0,
                 'range_improvement': (np.max(daily_data) - np.min(daily_data)) - 
-                                   (np.max(demand_after_battery) - np.min(demand_after_battery)) if len(demand_after_battery) > 0 else 0
+                                   (np.max(demand_after_battery) - np.min(demand_after_battery)) if len(demand_after_battery) > 0 else 0,
+                'initial_soc': initial_soc,
+                'final_soc': final_soc
             }
             
         except Exception as e:
             st.warning(f"日別シミュレーションでエラー: {e}")
-            return self._create_dummy_daily_result(daily_data, capacity, max_power, daily_cycle_target)
+            return self._create_dummy_daily_result_with_soc(daily_data, capacity, max_power, 
+                                                          daily_cycle_target, initial_soc)
     
-    def _create_dummy_daily_result(self, daily_data, capacity, max_power, daily_cycle_target):
-        """ダミー日別結果生成"""
+    def _create_dummy_daily_result_with_soc(self, daily_data, capacity, max_power, daily_cycle_target, initial_soc):
+        """SOC引き継ぎ対応ダミー日別結果生成"""
         np.random.seed(42)  # 再現性のため
         battery_output = np.random.uniform(-max_power/2, max_power/2, len(daily_data))
         demand_after_control = daily_data + battery_output
-        soc_profile = np.random.uniform(20, 80, len(daily_data))
+        
+        # SOCプロファイル生成（初期SOCから開始）
+        soc_changes = np.cumsum(battery_output) / (capacity / 100)  # 容量に対する変化率
+        soc_profile = np.clip(initial_soc + soc_changes, 10, 90)  # 10-90%の範囲
+        final_soc = soc_profile[-1]
         
         return {
             'optimized_params': {
@@ -222,21 +356,23 @@ class AnnualBatteryCapacityComparator:
             'control_info': {},
             'daily_discharge': np.sum(np.abs(battery_output[battery_output < 0])),
             'peak_reduction': np.max(daily_data) - np.max(demand_after_control),
-            'range_improvement': 100.0
+            'range_improvement': 100.0,
+            'initial_soc': initial_soc,
+            'final_soc': final_soc
         }
     
     def run_annual_capacity_comparison(self, annual_demand, capacity_list, 
                                      cycle_target_ratio=365.0, cycle_tolerance=5000,
                                      optimization_trials=20, power_scaling_method='capacity_ratio',
-                                     use_parallel=True):
-        """年間容量別シミュレーション実行"""
+                                     use_parallel=True, initial_soc=50.0):
+        """SOC引き継ぎ対応年間容量別シミュレーション実行"""
         
         # データ検証
         validated_demand = self.validate_annual_data(annual_demand)
         
         # 日別バッチ作成
         daily_batches = self.create_daily_batches(validated_demand)
-        st.info(f"年間データを{len(daily_batches)}日のバッチに分割しました")
+        st.info(f"年間データを{len(daily_batches)}日のバッチに分割しました（SOC引き継ぎあり）")
         
         self.comparison_results = {}
         self.daily_results = {}
@@ -249,7 +385,7 @@ class AnnualBatteryCapacityComparator:
         
         for i, capacity in enumerate(capacity_list):
             try:
-                st.write(f"容量 {capacity:,}kWh の年間最適化開始 ({i+1}/{len(capacity_list)})")
+                st.write(f"容量 {capacity:,}kWh の年間最適化開始 ({i+1}/{len(capacity_list)}) - SOC引き継ぎあり")
                 
                 # 容量に応じた設定
                 annual_cycle_target = int(capacity * cycle_target_ratio)
@@ -270,60 +406,47 @@ class AnnualBatteryCapacityComparator:
                 else:
                     max_power = capacity / 16
                 
-                # 日別結果を保存するリスト
+                # 年間シミュレーション用変数
                 daily_results_for_capacity = {}
-                monthly_summary = {}  # 月別サマリー用
+                monthly_summary = {}
                 annual_battery_output = []
                 annual_soc_profile = []
                 annual_demand_after_control = []
                 
-                # 日別シミュレーション（並列処理オプション）
-                if use_parallel and len(daily_batches) > 10:
-                    # 並列処理
-                    with ThreadPoolExecutor(max_workers=min(8, len(daily_batches))) as executor:
-                        future_to_day = {
-                            executor.submit(
-                                self.run_daily_simulation,
-                                batch['data'], capacity, max_power, 
-                                daily_cycle_target, daily_cycle_tolerance, optimization_trials
-                            ): batch for batch in daily_batches
-                        }
-                        
-                        for future in as_completed(future_to_day):
-                            batch = future_to_day[future]
-                            try:
-                                result = future.result()
-                                daily_results_for_capacity[batch['day']] = result
-                                completed_operations += 1
-                                
-                                # プログレス更新（10日毎に表示）
-                                if completed_operations % 10 == 0:
-                                    progress = completed_operations / total_operations
-                                    progress_bar.progress(progress)
-                                
-                            except Exception as e:
-                                st.error(f"{batch['day_name']}の処理でエラー: {e}")
+                # SOC引き継ぎのための変数
+                current_soc = initial_soc  # 年間開始時のSOC
+                soc_history = [initial_soc]  # SOC履歴
                 
-                else:
-                    # 逐次処理
-                    for batch in daily_batches:
-                        try:
-                            result = self.run_daily_simulation(
-                                batch['data'], capacity, max_power,
-                                daily_cycle_target, daily_cycle_tolerance, optimization_trials
-                            )
-                            daily_results_for_capacity[batch['day']] = result
-                            completed_operations += 1
-                            
-                            # プログレス更新（10日毎に表示）
-                            if completed_operations % 10 == 0:
-                                progress = completed_operations / total_operations
-                                progress_bar.progress(progress)
-                                st.write(f"  - {batch['day_name']} 完了 ({len(daily_results_for_capacity)}/365日)")
-                            
-                        except Exception as e:
-                            st.error(f"{batch['day_name']}の処理でエラー: {e}")
-                            continue
+                # 並列処理は使用しない（SOC引き継ぎのため逐次処理必須）
+                st.info("SOC引き継ぎのため逐次処理で実行します")
+                
+                # 日別シミュレーション（逐次処理・SOC引き継ぎ）
+                for day_idx, batch in enumerate(daily_batches):
+                    try:
+                        # SOC引き継ぎありで日別シミュレーション実行
+                        result = self.run_daily_simulation_with_soc(
+                            batch['data'], capacity, max_power,
+                            daily_cycle_target, daily_cycle_tolerance, optimization_trials,
+                            initial_soc=current_soc  # 前日の最終SOCを引き継ぎ
+                        )
+                        
+                        daily_results_for_capacity[batch['day']] = result
+                        completed_operations += 1
+                        
+                        # 翌日のためにSOCを更新
+                        current_soc = result['final_soc']
+                        soc_history.append(current_soc)
+                        
+                        # プログレス更新（5日毎に表示）
+                        if completed_operations % 5 == 0:
+                            progress = completed_operations / total_operations
+                            progress_bar.progress(progress)
+                            st.write(f"  - {batch['day_name']} 完了 ({len(daily_results_for_capacity)}/365日), SOC: {current_soc:.1f}%")
+                        
+                    except Exception as e:
+                        st.error(f"{batch['day_name']}の処理でエラー: {e}")
+                        # エラー時もSOCは前の値を維持
+                        continue
                 
                 # 日別結果を年間結果に統合
                 for day in sorted(daily_results_for_capacity.keys()):
@@ -332,7 +455,7 @@ class AnnualBatteryCapacityComparator:
                     annual_soc_profile.extend(result['soc_profile'])
                     annual_demand_after_control.extend(result['demand_after_control'])
                 
-                # 月別サマリー作成（表示用）
+                # 月別サマリー作成
                 for month in range(1, 13):
                     month_days = [day for day in daily_results_for_capacity.keys() 
                                 if len(daily_batches) > day-1 and daily_batches[day-1]['month'] == month]
@@ -342,10 +465,14 @@ class AnnualBatteryCapacityComparator:
                                               for day in month_days)
                         monthly_peak_reduction = np.mean([daily_results_for_capacity[day]['peak_reduction'] 
                                                         for day in month_days])
+                        # 月末SOC
+                        month_end_soc = daily_results_for_capacity[max(month_days)]['final_soc']
+                        
                         monthly_summary[month] = {
                             'monthly_discharge': monthly_discharge,
                             'peak_reduction': monthly_peak_reduction,
-                            'days_count': len(month_days)
+                            'days_count': len(month_days),
+                            'month_end_soc': month_end_soc
                         }
                 
                 # 年間統計計算
@@ -353,7 +480,16 @@ class AnnualBatteryCapacityComparator:
                 annual_demand_after_control = np.array(annual_demand_after_control)
                 annual_soc_profile = np.array(annual_soc_profile)
                 
-                # 年間滑らかさ指標（サンプリングして計算負荷軽減）
+                # SOC統計
+                soc_stats = {
+                    'initial_soc': initial_soc,
+                    'final_soc': current_soc,
+                    'soc_range': np.max(annual_soc_profile) - np.min(annual_soc_profile),
+                    'soc_average': np.mean(annual_soc_profile),
+                    'soc_daily_history': soc_history
+                }
+                
+                # 年間滑らかさ指標
                 sample_size = min(len(validated_demand), 10000)
                 sample_indices = np.random.choice(len(validated_demand), sample_size, replace=False)
                 sample_original = validated_demand[sample_indices]
@@ -379,15 +515,15 @@ class AnnualBatteryCapacityComparator:
                                               (np.max(annual_demand_after_control) - np.min(annual_demand_after_control))) if len(annual_demand_after_control) > 0 else 0,
                     'annual_discharge': -np.sum(annual_battery_output[annual_battery_output < 0]) if len(annual_battery_output) > 0 else 0,
                     'annual_cycle_constraint_satisfied': abs(-np.sum(annual_battery_output[annual_battery_output < 0]) - annual_cycle_target) <= cycle_tolerance if len(annual_battery_output) > 0 else False,
-                    'daily_results': daily_results_for_capacity,  # 日別結果
-                    'monthly_summary': monthly_summary,           # 月別サマリー
-                    # 季節別統計
-                    'seasonal_stats': self._calculate_seasonal_stats(validated_demand, annual_demand_after_control, monthly_summary)
+                    'daily_results': daily_results_for_capacity,
+                    'monthly_summary': monthly_summary,
+                    'seasonal_stats': self._calculate_seasonal_stats(validated_demand, annual_demand_after_control, monthly_summary),
+                    'soc_stats': soc_stats  # SOC統計を追加
                 }
                 
                 self.daily_results[capacity] = daily_results_for_capacity
                 
-                st.success(f"容量 {capacity:,}kWh の年間最適化完了（{len(daily_results_for_capacity)}日処理）")
+                st.success(f"容量 {capacity:,}kWh の年間最適化完了（{len(daily_results_for_capacity)}日処理, 初期SOC: {initial_soc:.1f}% → 最終SOC: {current_soc:.1f}%）")
                 
                 # メモリクリーンアップ
                 gc.collect()
@@ -447,7 +583,7 @@ class AnnualBatteryCapacityComparator:
         return seasonal_stats
     
     def get_annual_comparison_summary(self):
-        """年間比較結果のサマリー取得"""
+        """年間比較結果のサマリー取得（SOC情報含む）"""
         if not self.comparison_results:
             return None
         
@@ -460,6 +596,9 @@ class AnnualBatteryCapacityComparator:
             # サイクル数計算（放電量 ÷ 容量）
             target_cycles = cycle_target / capacity if capacity > 0 else 0
             actual_cycles = cycle_actual / capacity if capacity > 0 else 0
+            
+            # SOC統計
+            soc_stats = result.get('soc_stats', {})
             
             summary.append({
                 '容量(kWh)': f"{capacity:,}",
@@ -474,6 +613,11 @@ class AnnualBatteryCapacityComparator:
                 'サイクル数実績': f"{actual_cycles:.0f}回",
                 'サイクル数達成率(%)': f"{(actual_cycles/target_cycles*100):.1f}" if target_cycles > 0 else "0.0",
                 '年間サイクル制約': 'OK' if result['annual_cycle_constraint_satisfied'] else 'NG',
+                '初期SOC(%)': f"{soc_stats.get('initial_soc', 50):.1f}",
+                '最終SOC(%)': f"{soc_stats.get('final_soc', 50):.1f}",
+                'SOC変化': f"{soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50):+.1f}",
+                'SOC範囲(%)': f"{soc_stats.get('soc_range', 0):.1f}",
+                '平均SOC(%)': f"{soc_stats.get('soc_average', 50):.1f}",
                 '春ピーク削減(kW)': f"{result['seasonal_stats']['spring']['peak_reduction']:.1f}",
                 '夏ピーク削減(kW)': f"{result['seasonal_stats']['summer']['peak_reduction']:.1f}",
                 '秋ピーク削減(kW)': f"{result['seasonal_stats']['autumn']['peak_reduction']:.1f}",
@@ -513,9 +657,10 @@ def initialize_session_state():
         'sim_annual_cycle_ratio': 365.0,
         'sim_annual_cycle_tolerance': 5000,
         'sim_monthly_optimization_trials': 20,
-        'sim_use_parallel': True,
+        'sim_use_parallel': False,  # SOC引き継ぎのため並列処理は無効
         'sim_individual_capacities': [30000, 60000, 120000, 200000, 300000],
-        'sim_individual_powers': []
+        'sim_individual_powers': [],
+        'sim_initial_soc': 50.0  # 初期SOC設定を追加
     }
     
     for var, default_value in session_vars.items():
@@ -527,12 +672,15 @@ def main():
     """メイン関数"""
     initialize_session_state()
     
-    st.title("年間バッテリー容量別シミュレーション比較システム")
-    st.write("複数のバッテリー容量での年間需要平準化効果を比較し、最適容量を検討")
+    st.title("年間バッテリー容量別シミュレーション比較システム（SOC引き継ぎ対応）")
+    st.write("複数のバッテリー容量での年間需要平準化効果を比較し、最適容量を検討（SOC引き継ぎあり）")
     
     # コアロジック利用可能性の表示
     if not CORE_LOGIC_AVAILABLE:
         st.error("⚠️ コアロジック（battery_core_logic）が利用できません。ダミーデータでの動作となります。")
+    
+    # SOC引き継ぎ対応の表示
+    st.info("🔋 SOC引き継ぎ機能が有効です：前日の最終SOCが翌日の初期SOCとして使用されます")
     
     # ステージ表示
     stage_names = {
@@ -680,8 +828,8 @@ def show_data_upload_section():
 
 
 def show_simulation_config_section():
-    """シミュレーション設定セクション"""
-    st.header("2. 年間容量別シミュレーション設定")
+    """シミュレーション設定セクション（SOC引き継ぎ対応）"""
+    st.header("2. 年間容量別シミュレーション設定（SOC引き継ぎ対応）")
     
     # データ確認表示
     if st.session_state.annual_demand is not None:
@@ -700,6 +848,26 @@ def show_simulation_config_section():
         st.session_state.simulation_stage = 'data_upload'
         st.session_state.annual_demand = None
         st.rerun()
+    
+    # SOC引き継ぎ設定セクション
+    st.subheader("🔋 SOC引き継ぎ設定")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.sim_initial_soc = st.slider(
+            "年間開始時の初期SOC (%)",
+            min_value=10.0, max_value=90.0, value=st.session_state.sim_initial_soc, step=5.0,
+            help="年間シミュレーション開始時のバッテリーSOC（各日は前日の最終SOCから開始）",
+            key="initial_soc_slider"
+        )
+    
+    with col2:
+        st.info(f"""
+        **SOC引き継ぎ機能:**
+        - 1日目: {st.session_state.sim_initial_soc:.0f}%からスタート
+        - 2日目以降: 前日の最終SOCから開始
+        - より現実的なバッテリー運用をシミュレーション
+        """)
     
     # 年間シミュレーション設定セクション
     st.subheader("年間シミュレーション設定")
@@ -852,7 +1020,7 @@ def show_simulation_config_section():
         st.session_state.sim_monthly_optimization_trials = st.slider(
             "日別最適化試行回数",
             min_value=5, max_value=30, value=min(st.session_state.sim_monthly_optimization_trials, 15), step=2,
-            help="各日の最適化試行回数（少なくすると高速化、日別処理のため月別より少なめ推奨）",
+            help="各日の最適化試行回数（少なくすると高速化）",
             key="daily_optimization_trials_slider"
         )
     
@@ -862,51 +1030,59 @@ def show_simulation_config_section():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.session_state.sim_use_parallel = st.checkbox(
+        # SOC引き継ぎのため並列処理は無効
+        st.session_state.sim_use_parallel = False
+        st.info("🔒 SOC引き継ぎのため並列処理は無効化されています")
+        st.checkbox(
             "並列処理を使用", 
-            value=st.session_state.sim_use_parallel,
-            help="日別処理を並列実行（高速化、但しメモリ使用量増加）",
-            key="use_parallel_checkbox"
+            value=False,
+            disabled=True,
+            help="SOC引き継ぎ機能のため、逐次処理で実行されます",
+            key="use_parallel_checkbox_disabled"
         )
     
     with col2:
-        # 予想計算時間（日別処理）
-        estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * (0.1 if st.session_state.sim_use_parallel else 0.3)
+        # 予想計算時間（逐次処理）
+        estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * 0.3
         st.info(f"""
-        **予想処理時間（日別処理）:**
+        **予想処理時間（SOC引き継ぎ・逐次処理）:**
         - 容量数: {len(capacity_list)}
         - 日数: 365日
-        - 並列処理: {'有効' if st.session_state.sim_use_parallel else '無効'}
+        - 処理方式: 逐次（SOC引き継ぎのため）
         
         約 {estimated_time/60:.1f}分 〜 {estimated_time/20:.1f}分
         
-        ※日別最適化により正確な制御が可能
+        ※SOC引き継ぎにより正確な年間運用をシミュレーション
         """)
     
-    # 日別処理の説明
-    with st.expander("📋 日別処理について", expanded=False):
+    # SOC引き継ぎ処理の説明
+    with st.expander("🔋 SOC引き継ぎ処理について", expanded=False):
         st.write("""
-        **日別処理の利点:**
-        - `battery_core_logic`の設計仕様（1日=96ステップ）に正確に準拠
-        - 各日の需要パターンに最適化されたバッテリー制御
-        - より現実的な運用シミュレーション
+        **SOC引き継ぎ処理の特徴:**
+        - **現実的なバッテリー運用**: 前日の最終SOCが翌日の初期SOCとして使用
+        - **エネルギー収支の整合性**: 日をまたぐ充放電計画が可能
+        - **年間通しての最適化**: 季節変動やSOC推移を考慮した運用
         
-        **処理内容:**
-        - 年間365日を個別に最適化
-        - 各日で独立したパラメータ最適化
-        - 日別サイクル目標: 年間目標 ÷ 365
-        - 結果を月別・季節別に集計して表示
+        **処理の流れ:**
+        - 1日目: 設定した初期SOC（{st.session_state.sim_initial_soc:.0f}%）からスタート
+        - 2日目以降: 前日の最終SOCから開始
+        - 各日で独立した最適化を実行
+        - SOC履歴を記録し、年間推移を分析
+        
+        **従来の日別独立処理との違い:**
+        - ❌ 従来: 毎日同じSOCからリセット → 非現実的
+        - ✅ SOC引き継ぎ: 前日の状態を継承 → 現実的
         
         **注意事項:**
-        - 月別処理より計算時間が増加
+        - 逐次処理のため計算時間が増加
         - より正確だが、処理負荷が高い
-        - 並列処理推奨（特に複数容量比較時）
+        - SOC履歴により詳細な分析が可能
         """)
     
     # 年間シミュレーション実行ボタン
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🚀 年間シミュレーション実行（日別最適化）", use_container_width=True, key="run_simulation_button"):
+        if st.button("🚀 年間シミュレーション実行（SOC引き継ぎ）", use_container_width=True, key="run_simulation_button"):
             
             if len(set(capacity_list)) != len(capacity_list):
                 st.error("重複する容量があります。設定を確認してください。")
@@ -919,7 +1095,7 @@ def show_simulation_config_section():
                 start_time = time.time()
                 
                 try:
-                    status_text.text("年間シミュレーションシステム初期化中...")
+                    status_text.text("年間シミュレーションシステム初期化中（SOC引き継ぎ対応）...")
                     progress_bar.progress(5)
                     
                     annual_comparator = AnnualBatteryCapacityComparator()
@@ -927,8 +1103,8 @@ def show_simulation_config_section():
                     status_text.text("年間需要データ検証・準備中...")
                     progress_bar.progress(10)
                     
-                    # 年間シミュレーション実行
-                    status_text.text("年間容量別最適化実行中...")
+                    # 年間シミュレーション実行（SOC引き継ぎあり）
+                    status_text.text("年間容量別最適化実行中（SOC引き継ぎ処理）...")
                     time_text.text(f"経過時間: {time.time() - start_time:.0f}秒")
                     
                     annual_results = annual_comparator.run_annual_capacity_comparison(
@@ -938,7 +1114,8 @@ def show_simulation_config_section():
                         cycle_tolerance=st.session_state.sim_annual_cycle_tolerance,
                         optimization_trials=st.session_state.sim_monthly_optimization_trials,
                         power_scaling_method=st.session_state.sim_power_scaling_method,
-                        use_parallel=st.session_state.sim_use_parallel
+                        use_parallel=False,  # SOC引き継ぎのため強制的に無効
+                        initial_soc=st.session_state.sim_initial_soc
                     )
                     
                     progress_bar.progress(95)
@@ -956,7 +1133,7 @@ def show_simulation_config_section():
                         status_text.text(f"年間シミュレーション完了！（処理時間: {elapsed_time/60:.1f}分）")
                         time_text.empty()
                         
-                        st.success(f"🎉 {len(annual_results)}種類の容量で年間シミュレーションが完了しました！")
+                        st.success(f"🎉 {len(annual_results)}種類の容量で年間シミュレーションが完了しました（SOC引き継ぎあり）！")
                         
                         time.sleep(2)
                         st.rerun()
@@ -976,8 +1153,8 @@ def show_simulation_config_section():
 
 
 def display_annual_results():
-    """年間結果表示"""
-    # 各項目を個別にチェック
+    """年間結果表示（SOC引き継ぎ対応）"""
+    # 個別チェックでNumPy配列エラーを回避
     if (not st.session_state.annual_comparison_results or
         not st.session_state.annual_capacity_list or
         st.session_state.annual_demand is None or
@@ -995,7 +1172,7 @@ def display_annual_results():
     annual_demand = st.session_state.annual_demand
     annual_comparator = st.session_state.annual_comparator
     
-    st.header("3. 年間シミュレーション結果")
+    st.header("3. 年間シミュレーション結果（SOC引き継ぎ対応）")
     
     # 設定変更ボタン
     col1, col2 = st.columns([3, 1])
@@ -1006,17 +1183,40 @@ def display_annual_results():
             st.session_state.simulation_stage = 'simulation_config'
             st.rerun()
     
+    # SOC引き継ぎ結果の表示
+    st.subheader("🔋 SOC引き継ぎ結果概要")
+    
+    soc_summary_data = []
+    for capacity, result in results.items():
+        soc_stats = result.get('soc_stats', {})
+        soc_summary_data.append({
+            '容量(kWh)': f"{capacity:,}",
+            '初期SOC(%)': f"{soc_stats.get('initial_soc', 50):.1f}",
+            '最終SOC(%)': f"{soc_stats.get('final_soc', 50):.1f}",
+            'SOC変化': f"{soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50):+.1f}",
+            'SOC範囲(%)': f"{soc_stats.get('soc_range', 0):.1f}",
+            '平均SOC(%)': f"{soc_stats.get('soc_average', 50):.1f}"
+        })
+    
+    soc_summary_df = pd.DataFrame(soc_summary_data)
+    st.dataframe(soc_summary_df, use_container_width=True)
+    
     # サマリーテーブル
-    st.subheader("📊 年間効果サマリー")
+    st.subheader("📊 年間効果サマリー（SOC引き継ぎ対応）")
     summary_df = annual_comparator.get_annual_comparison_summary()
     
     if summary_df is not None:
         st.dataframe(summary_df, use_container_width=True)
         
-        # サイクル制約の詳細説明
-        st.subheader("サイクル制約の詳細説明")
-        with st.expander("📋 サイクル制約について", expanded=False):
+        # SOC引き継ぎとサイクル制約の詳細説明
+        st.subheader("SOC引き継ぎとサイクル制約の詳細説明")
+        with st.expander("🔋 SOC引き継ぎ・サイクル制約について", expanded=False):
             st.write("""
+            **SOC引き継ぎ機能:**
+            - **現実的なバッテリー運用**: 前日の最終SOCが翌日の初期SOCとして使用
+            - **エネルギー収支の整合性**: 日をまたぐ充放電計画が可能
+            - **年間通しての最適化**: 季節変動やSOC推移を考慮した運用
+            
             **サイクル制約とは:**
             - バッテリーの年間使用量（放電量）の目標値
             - 年間サイクル数 × バッテリー容量で計算されます
@@ -1029,12 +1229,11 @@ def display_annual_results():
             - 例：容量50MWh、年間放電量18,250MWh → 365.0サイクル
             
             **表示項目:**
-            - **サイクル制約目標**: 設定された年間放電目標値（MWh）
-            - **サイクル制約実績**: シミュレーション結果の実際の年間放電量（MWh）
-            - **サイクル目標/実績**: 目標値/実績値の対比表示
-            - **サイクル数目標**: 目標放電量をサイクル数で表示（350-365回）
-            - **サイクル数実績**: 実際の放電量をサイクル数で表示
-            - **サイクル数達成率**: 実績サイクル数 ÷ 目標サイクル数 × 100%
+            - **初期/最終SOC**: 年間開始時と終了時のSOC状態
+            - **SOC変化**: 年間を通したSOCの変化量
+            - **SOC範囲**: 年間で最大・最小SOCの差
+            - **平均SOC**: 年間平均SOC
+            - **サイクル制約目標/実績**: 設定目標値とシミュレーション結果
             - **年間サイクル制約**: 制約条件を満たしているかの判定
             """)
             
@@ -1045,10 +1244,7 @@ def display_annual_results():
             with col2:
                 st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f} MWh")
             with col3:
-                if capacity_list:
-                    # 許容範囲をサイクル数で表示
-                    tolerance_cycles = st.session_state.sim_annual_cycle_tolerance / capacity_list[0]
-                    st.metric("許容範囲（サイクル数）", f"±{tolerance_cycles:.1f}回")
+                st.metric("初期SOC設定", f"{st.session_state.sim_initial_soc:.0f}%")
             with col4:
                 st.metric("1日あたり", f"{st.session_state.sim_annual_cycle_ratio/365:.2f}回")
             
@@ -1070,24 +1266,29 @@ def display_annual_results():
             st.dataframe(example_df, use_container_width=True)
     
     # タブで結果を整理
-    tab1, tab2, tab3, tab4 = st.tabs(["年間需要比較", "季節別分析", "月別詳細", "推奨容量"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["年間需要比較", "SOC推移分析", "季節別分析", "月別詳細", "推奨容量"])
     
     with tab1:
         show_annual_demand_comparison(results, capacity_list, annual_demand)
     
     with tab2:
-        show_seasonal_analysis(results)
+        show_soc_analysis(results, capacity_list)
     
     with tab3:
-        show_monthly_detail_analysis(results, capacity_list, annual_comparator)
+        show_seasonal_analysis(results)
     
     with tab4:
+        show_monthly_detail_analysis(results, capacity_list, annual_comparator)
+    
+    with tab5:
         show_capacity_recommendation(results, capacity_list)
     
     # ダウンロードセクション
     show_download_section(summary_df, results, annual_comparator)
+
+
 def show_annual_demand_comparison(results, capacity_list, annual_demand):
-    """年間需要比較タブの内容"""
+    """年間需要比較タブの内容（SOC引き継ぎ対応）"""
     st.subheader("年間需要カーブ比較")
     
     # グラフ表示期間選択
@@ -1193,12 +1394,12 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         fig_demand.add_trace(go.Scatter(
             x=period_times,
             y=period_controlled,
-            name=f"電池制御後（{selected_capacity_graph:,}kWh）",
+            name=f"電池制御後（{selected_capacity_graph:,}kWh・SOC引き継ぎ）",
             line=dict(color="red", width=2)
         ))
         
         fig_demand.update_layout(
-            title=f"需要カーブ比較 - {period_title}",
+            title=f"需要カーブ比較 - {period_title}（SOC引き継ぎ対応）",
             xaxis_title="日時",
             yaxis_title="需要 (kW)",
             height=500,
@@ -1233,7 +1434,7 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
                 st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
         
         # 全容量比較グラフ（年間データのサンプル表示）
-        st.subheader("全容量比較（年間サンプル）")
+        st.subheader("全容量比較（年間サンプル・SOC引き継ぎ対応）")
         
         # データサンプリング（表示用）
         sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
@@ -1260,12 +1461,12 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
             fig_annual.add_trace(go.Scatter(
                 x=sample_times,
                 y=result['demand_after_control'][sample_indices],
-                name=f"容量{capacity:,}kWh制御後",
+                name=f"容量{capacity:,}kWh制御後（SOC引き継ぎ）",
                 line=dict(color=colors[i % len(colors)], width=2)
             ))
         
         fig_annual.update_layout(
-            title="年間需要平準化効果比較（全容量・サンプル表示）",
+            title="年間需要平準化効果比較（全容量・SOC引き継ぎ・サンプル表示）",
             xaxis_title="日時",
             yaxis_title="需要 (kW)",
             height=600,
@@ -1278,56 +1479,6 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         st.error(f"年間グラフ作成エラー: {e}")
         import traceback
         st.text(traceback.format_exc())
-    
-    # バッテリー出力グラフ
-    st.subheader("バッテリー出力パターン")
-    
-    try:
-        if selected_capacity_graph in results:
-            # 同じ期間のバッテリー出力を表示
-            if graph_period != "全年間（サンプル）":
-                battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
-                battery_times = period_times
-            else:
-                battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
-                battery_times = period_times
-            
-            fig_battery = go.Figure()
-            
-            # 充電（正の値）と放電（負の値）を色分け
-            charging = np.where(battery_output >= 0, battery_output, 0)
-            discharging = np.where(battery_output < 0, battery_output, 0)
-            
-            fig_battery.add_trace(go.Scatter(
-                x=battery_times,
-                y=charging,
-                name="充電",
-                fill='tozeroy',
-                line=dict(color="blue"),
-                opacity=0.7
-            ))
-            
-            fig_battery.add_trace(go.Scatter(
-                x=battery_times,
-                y=discharging,
-                name="放電",
-                fill='tozeroy',
-                line=dict(color="orange"),
-                opacity=0.7
-            ))
-            
-            fig_battery.update_layout(
-                title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
-                xaxis_title="日時",
-                yaxis_title="出力 (kW)",
-                height=400,
-                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-            )
-            
-            st.plotly_chart(fig_battery, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"バッテリー出力グラフ作成エラー: {e}")
     
     # 年間統計
     col1, col2, col3, col4 = st.columns(4)
@@ -1344,7 +1495,7 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         fig_peak = px.bar(
             pd.DataFrame(peak_data),
             x='capacity', y='peak_reduction',
-            title="容量別年間ピーク削減量"
+            title="容量別年間ピーク削減量（SOC引き継ぎ）"
         )
         st.plotly_chart(fig_peak, use_container_width=True)
     
@@ -1406,9 +1557,165 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         st.plotly_chart(fig_cycles, use_container_width=True)
 
 
+def show_soc_analysis(results, capacity_list):
+    """SOC推移分析タブの内容"""
+    st.subheader("🔋 SOC推移分析")
+    
+    # 容量選択
+    selected_capacity_soc = st.selectbox(
+        "SOC分析する容量を選択",
+        capacity_list,
+        format_func=lambda x: f"{x:,}kWh",
+        key="soc_analysis_capacity_select"
+    )
+    
+    if selected_capacity_soc in results:
+        result = results[selected_capacity_soc]
+        soc_stats = result.get('soc_stats', {})
+        
+        # SOC統計表示
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric("初期SOC", f"{soc_stats.get('initial_soc', 50):.1f}%")
+        with col2:
+            st.metric("最終SOC", f"{soc_stats.get('final_soc', 50):.1f}%")
+        with col3:
+            soc_change = soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50)
+            st.metric("SOC変化", f"{soc_change:+.1f}%")
+        with col4:
+            st.metric("SOC範囲", f"{soc_stats.get('soc_range', 0):.1f}%")
+        with col5:
+            st.metric("平均SOC", f"{soc_stats.get('soc_average', 50):.1f}%")
+        
+        # 年間SOC推移グラフ
+        st.subheader("年間SOC推移")
+        
+        # SOCプロファイルのサンプリング（表示用）
+        soc_profile = result.get('soc_profile', [])
+        if len(soc_profile) > 0:
+            sample_size = min(len(soc_profile), 8760)  # 約1週間分を表示
+            sample_indices = np.linspace(0, len(soc_profile)-1, sample_size, dtype=int)
+            
+            time_series = create_annual_time_series()
+            sample_times = [time_series[i] for i in sample_indices]
+            sample_soc = soc_profile[sample_indices]
+            
+            fig_soc = go.Figure()
+            
+            fig_soc.add_trace(go.Scatter(
+                x=sample_times,
+                y=sample_soc,
+                name=f"SOC推移（{selected_capacity_soc:,}kWh）",
+                line=dict(color="green", width=2),
+                fill='tonexty' if len(sample_soc) > 0 else None
+            ))
+            
+            # SOC限界値の表示
+            fig_soc.add_hline(y=90, line_dash="dash", line_color="red", annotation_text="SOC上限(90%)")
+            fig_soc.add_hline(y=10, line_dash="dash", line_color="red", annotation_text="SOC下限(10%)")
+            fig_soc.add_hline(y=50, line_dash="dot", line_color="gray", annotation_text="SOC中央(50%)")
+            
+            fig_soc.update_layout(
+                title=f"年間SOC推移 - 容量{selected_capacity_soc:,}kWh（SOC引き継ぎあり）",
+                xaxis_title="日時",
+                yaxis_title="SOC (%)",
+                yaxis=dict(range=[0, 100]),
+                height=500
+            )
+            
+            st.plotly_chart(fig_soc, use_container_width=True)
+        
+        # 日別SOC変化履歴
+        st.subheader("日別SOC変化履歴")
+        
+        soc_daily_history = soc_stats.get('soc_daily_history', [])
+        if len(soc_daily_history) > 1:
+            # 月単位でグループ化
+            days = list(range(len(soc_daily_history)))
+            months = [((day-1) // 30) + 1 for day in days if day > 0]  # 簡易月計算
+            
+            fig_daily_soc = go.Figure()
+            
+            fig_daily_soc.add_trace(go.Scatter(
+                x=days,
+                y=soc_daily_history,
+                name="日別SOC",
+                line=dict(color="blue", width=2),
+                mode='lines+markers',
+                marker=dict(size=4)
+            ))
+            
+            fig_daily_soc.update_layout(
+                title=f"日別SOC履歴 - 容量{selected_capacity_soc:,}kWh（365日間）",
+                xaxis_title="日数",
+                yaxis_title="SOC (%)",
+                yaxis=dict(range=[0, 100]),
+                height=400
+            )
+            
+            st.plotly_chart(fig_daily_soc, use_container_width=True)
+            
+            # SOC変化の統計
+            if len(soc_daily_history) > 1:
+                daily_soc_changes = np.diff(soc_daily_history)
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("最大日別SOC増加", f"{np.max(daily_soc_changes):.1f}%")
+                with col2:
+                    st.metric("最大日別SOC減少", f"{np.min(daily_soc_changes):.1f}%")
+                with col3:
+                    st.metric("日別SOC変化平均", f"{np.mean(daily_soc_changes):.2f}%")
+                with col4:
+                    st.metric("日別SOC変化標準偏差", f"{np.std(daily_soc_changes):.2f}%")
+    
+    # 全容量のSOC比較
+    st.subheader("全容量SOC比較")
+    
+    soc_comparison_data = []
+    for capacity, result in results.items():
+        soc_stats = result.get('soc_stats', {})
+        soc_comparison_data.append({
+            '容量': f"{capacity:,}kWh",
+            '初期SOC': soc_stats.get('initial_soc', 50),
+            '最終SOC': soc_stats.get('final_soc', 50),
+            'SOC変化': soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50),
+            'SOC範囲': soc_stats.get('soc_range', 0),
+            '平均SOC': soc_stats.get('soc_average', 50)
+        })
+    
+    soc_comparison_df = pd.DataFrame(soc_comparison_data)
+    
+    if not soc_comparison_df.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_soc_change = px.bar(
+                soc_comparison_df, x='容量', y='SOC変化',
+                title="容量別年間SOC変化",
+                color='SOC変化',
+                color_continuous_scale='RdYlGn'
+            )
+            st.plotly_chart(fig_soc_change, use_container_width=True)
+        
+        with col2:
+            fig_soc_range = px.bar(
+                soc_comparison_df, x='容量', y='SOC範囲',
+                title="容量別SOC変動範囲",
+                color='SOC範囲',
+                color_continuous_scale='Blues'
+            )
+            st.plotly_chart(fig_soc_range, use_container_width=True)
+        
+        # SOC比較詳細テーブル
+        st.subheader("SOC比較詳細データ")
+        st.dataframe(soc_comparison_df, use_container_width=True)
+
+
 def show_seasonal_analysis(results):
-    """季節別分析タブの内容"""
-    st.subheader("🌸 季節別分析")
+    """季節別分析タブの内容（SOC引き継ぎ対応）"""
+    st.subheader("🌸 季節別分析（SOC引き継ぎ対応）")
     
     # 季節別ピーク削減比較
     seasonal_data = []
@@ -1433,7 +1740,7 @@ def show_seasonal_analysis(results):
         with col1:
             fig_seasonal_peak = px.bar(
                 seasonal_df, x='季節', y='ピーク削減', color='容量',
-                title="季節別ピーク削減効果",
+                title="季節別ピーク削減効果（SOC引き継ぎ）",
                 barmode='group'
             )
             st.plotly_chart(fig_seasonal_peak, use_container_width=True)
@@ -1441,7 +1748,7 @@ def show_seasonal_analysis(results):
         with col2:
             fig_seasonal_avg = px.bar(
                 seasonal_df, x='季節', y='平均削減', color='容量',
-                title="季節別平均削減効果",
+                title="季節別平均削減効果（SOC引き継ぎ）",
                 barmode='group'
             )
             st.plotly_chart(fig_seasonal_avg, use_container_width=True)
@@ -1453,8 +1760,8 @@ def show_seasonal_analysis(results):
 
 
 def show_monthly_detail_analysis(results, capacity_list, annual_comparator):
-    """月別詳細分析タブの内容"""
-    st.subheader("📅 日別・月別詳細分析")
+    """月別詳細分析タブの内容（SOC引き継ぎ対応）"""
+    st.subheader("📅 日別・月別詳細分析（SOC引き継ぎ対応）")
     
     # 容量選択
     selected_capacity = st.selectbox(
@@ -1575,8 +1882,8 @@ def show_monthly_detail_analysis(results, capacity_list, annual_comparator):
 
 
 def show_capacity_recommendation(results, capacity_list):
-    """推奨容量判定タブの内容"""
-    st.subheader("🏆 推奨容量判定")
+    """推奨容量判定タブの内容（SOC引き継ぎ対応）"""
+    st.subheader("🏆 推奨容量判定（SOC引き継ぎ対応）")
     
     # 推奨容量の総合評価
     try:
@@ -1590,6 +1897,11 @@ def show_capacity_recommendation(results, capacity_list):
             efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25 if capacity > 0 else 0
             cycle_score = 100 if result.get('annual_cycle_constraint_satisfied', False) else 0
             
+            # SOC安定性スコア（SOC変化が小さい方が良い）
+            soc_stats = result.get('soc_stats', {})
+            soc_change = abs(soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50))
+            soc_stability_score = max(0, 10 - soc_change) * 0.1  # SOC変化10%以下で満点
+            
             # 季節バランススコア（標準偏差が小さい方が良い）
             seasonal_values = [
                 result['seasonal_stats']['spring']['peak_reduction'],
@@ -1597,15 +1909,16 @@ def show_capacity_recommendation(results, capacity_list):
                 result['seasonal_stats']['autumn']['peak_reduction'],
                 result['seasonal_stats']['winter']['peak_reduction']
             ]
-            seasonal_balance_score = -np.std(seasonal_values) * 0.2
+            seasonal_balance_score = -np.std(seasonal_values) * 0.1
             
-            total_score = peak_score + efficiency_score + cycle_score * 0.2 + seasonal_balance_score
+            total_score = peak_score + efficiency_score + cycle_score * 0.2 + soc_stability_score + seasonal_balance_score
             
             evaluation_results.append({
                 '容量(kWh)': f"{capacity:,}",
                 'ピーク削減スコア': f"{peak_score:.1f}",
                 '容量効率スコア': f"{efficiency_score:.1f}",
                 'サイクル制約スコア': f"{cycle_score * 0.2:.1f}",
+                'SOC安定性スコア': f"{soc_stability_score:.1f}",
                 '季節バランススコア': f"{seasonal_balance_score:.1f}",
                 '総合スコア': f"{total_score:.1f}"
             })
@@ -1622,8 +1935,10 @@ def show_capacity_recommendation(results, capacity_list):
         
         with col1:
             if best_capacity is not None:
+                best_result = results[best_capacity]
+                best_soc_stats = best_result.get('soc_stats', {})
                 st.success(f"""
-                **🥇 総合推奨容量**
+                **🥇 総合推奨容量（SOC引き継ぎ対応）**
                 
                 **{best_capacity:,}kWh**
                 
@@ -1633,6 +1948,12 @@ def show_capacity_recommendation(results, capacity_list):
                 - 年間通して安定した効果
                 - 容量効率が優秀
                 - サイクル制約を満足
+                - SOC安定性が良好
+                
+                **SOC特性:**
+                - 初期: {best_soc_stats.get('initial_soc', 50):.1f}%
+                - 最終: {best_soc_stats.get('final_soc', 50):.1f}%
+                - 変化: {best_soc_stats.get('final_soc', 50) - best_soc_stats.get('initial_soc', 50):+.1f}%
                 """)
         
         with col2:
@@ -1640,6 +1961,7 @@ def show_capacity_recommendation(results, capacity_list):
             best_peak_capacity = max(results.keys(), 
                                    key=lambda x: results[x].get('annual_peak_reduction', 0))
             peak_value = results[best_peak_capacity].get('annual_peak_reduction', 0)
+            peak_soc_stats = results[best_peak_capacity].get('soc_stats', {})
             
             st.info(f"""
             **📈 最大ピーク削減**
@@ -1651,6 +1973,10 @@ def show_capacity_recommendation(results, capacity_list):
             特徴:
             - 最大需要の大幅削減
             - 電力契約容量削減効果大
+            
+            **SOC特性:**
+            - SOC変化: {peak_soc_stats.get('final_soc', 50) - peak_soc_stats.get('initial_soc', 50):+.1f}%
+            - 平均SOC: {peak_soc_stats.get('soc_average', 50):.1f}%
             """)
         
         with col3:
@@ -1658,6 +1984,7 @@ def show_capacity_recommendation(results, capacity_list):
             best_efficiency_capacity = max(results.keys(), 
                                          key=lambda x: results[x].get('annual_peak_reduction', 0) / (x / 1000) if x > 0 else 0)
             efficiency_value = results[best_efficiency_capacity].get('annual_peak_reduction', 0) / (best_efficiency_capacity / 1000) if best_efficiency_capacity > 0 else 0
+            efficiency_soc_stats = results[best_efficiency_capacity].get('soc_stats', {})
             
             st.info(f"""
             **⚡ 最高効率**
@@ -1669,6 +1996,10 @@ def show_capacity_recommendation(results, capacity_list):
             特徴:
             - 投資効率が最も良好
             - コストパフォーマンス重視
+            
+            **SOC特性:**
+            - SOC範囲: {efficiency_soc_stats.get('soc_range', 0):.1f}%
+            - 最終SOC: {efficiency_soc_stats.get('final_soc', 50):.1f}%
             """)
     
     except Exception as e:
@@ -1678,8 +2009,8 @@ def show_capacity_recommendation(results, capacity_list):
 
 
 def show_download_section(summary_df, results, annual_comparator):
-    """ダウンロードセクション"""
-    st.header("4. 結果ダウンロード")
+    """ダウンロードセクション（SOC引き継ぎ対応）"""
+    st.header("4. 結果ダウンロード（SOC引き継ぎ対応）")
     
     col1, col2, col3 = st.columns(3)
     
@@ -1688,9 +2019,9 @@ def show_download_section(summary_df, results, annual_comparator):
             try:
                 summary_csv = summary_df.to_csv(index=False)
                 st.download_button(
-                    label="📊 年間サマリーCSV",
+                    label="📊 年間サマリーCSV（SOC引き継ぎ）",
                     data=summary_csv,
-                    file_name=f"annual_capacity_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"annual_capacity_summary_soc_carryover_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
                     key="download_summary_csv"
@@ -1699,12 +2030,12 @@ def show_download_section(summary_df, results, annual_comparator):
                 st.error(f"サマリーCSV生成エラー: {e}")
     
     with col2:
-        if st.button("📅 日別・月別詳細CSV", use_container_width=True, key="download_monthly_detail_btn"):
+        if st.button("📅 日別・月別詳細CSV（SOC含む）", use_container_width=True, key="download_monthly_detail_btn"):
             try:
                 detail_data = []
                 
                 for capacity, result in results.items():
-                    # 月別サマリー
+                    # 月別サマリー（SOC情報追加）
                     if 'monthly_summary' in result:
                         for month, monthly_result in result['monthly_summary'].items():
                             detail_data.append({
@@ -1713,12 +2044,13 @@ def show_download_section(summary_df, results, annual_comparator):
                                 '期間': f"{month}月",
                                 'ピーク削減(kW)': monthly_result['peak_reduction'],
                                 '放電量(kWh)': monthly_result['monthly_discharge'],
-                                '処理日数': monthly_result['days_count']
+                                '処理日数': monthly_result['days_count'],
+                                '月末SOC(%)': monthly_result.get('month_end_soc', 50)
                             })
                     
-                    # 日別詳細（サンプル：各月の最初の5日）
+                    # 日別詳細（SOC情報追加、サンプル：最初の50日）
                     if 'daily_results' in result:
-                        for day, daily_result in list(result['daily_results'].items())[:50]:  # 最初の50日
+                        for day, daily_result in list(result['daily_results'].items())[:50]:
                             month = annual_comparator._get_month_from_day(day - 1)
                             day_in_month = annual_comparator._get_day_in_month(day - 1)
                             detail_data.append({
@@ -1727,16 +2059,19 @@ def show_download_section(summary_df, results, annual_comparator):
                                 '期間': f"{month}月{day_in_month}日",
                                 'ピーク削減(kW)': daily_result['peak_reduction'],
                                 '放電量(kWh)': daily_result['daily_discharge'],
-                                '需要幅改善(kW)': daily_result['range_improvement']
+                                '需要幅改善(kW)': daily_result['range_improvement'],
+                                '初期SOC(%)': daily_result.get('initial_soc', 50),
+                                '最終SOC(%)': daily_result.get('final_soc', 50),
+                                'SOC変化(%)': daily_result.get('final_soc', 50) - daily_result.get('initial_soc', 50)
                             })
                 
                 detail_df = pd.DataFrame(detail_data)
                 detail_csv = detail_df.to_csv(index=False)
                 
                 st.download_button(
-                    label="日別・月別詳細をダウンロード",
+                    label="日別・月別詳細をダウンロード（SOC含む）",
                     data=detail_csv,
-                    file_name=f"annual_daily_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"annual_daily_monthly_details_soc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
                     key="download_detail_csv"
@@ -1745,36 +2080,38 @@ def show_download_section(summary_df, results, annual_comparator):
                 st.error(f"詳細CSV生成エラー: {e}")
     
     with col3:
-        if st.button("🌍 季節別統計CSV", use_container_width=True, key="download_seasonal_detail_btn"):
+        if st.button("🔋 SOC統計CSV", use_container_width=True, key="download_soc_stats_btn"):
             try:
-                seasonal_detail_data = []
-                seasons = ['spring', 'summer', 'autumn', 'winter']
-                season_names = ['春', '夏', '秋', '冬']
+                soc_stats_data = []
                 
                 for capacity, result in results.items():
-                    for season, season_name in zip(seasons, season_names):
-                        seasonal_detail_data.append({
-                            '容量(kWh)': capacity,
-                            '季節': season_name,
-                            'ピーク削減(kW)': result['seasonal_stats'][season]['peak_reduction'],
-                            '平均削減(kW)': result['seasonal_stats'][season]['average_reduction'],
-                            '放電量(kWh)': result['seasonal_stats'][season]['total_discharge']
-                        })
+                    soc_stats = result.get('soc_stats', {})
+                    soc_stats_data.append({
+                        '容量(kWh)': capacity,
+                        '初期SOC(%)': soc_stats.get('initial_soc', 50),
+                        '最終SOC(%)': soc_stats.get('final_soc', 50),
+                        'SOC変化(%)': soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50),
+                        'SOC範囲(%)': soc_stats.get('soc_range', 0),
+                        '平均SOC(%)': soc_stats.get('soc_average', 50),
+                        '年間ピーク削減(kW)': result['annual_peak_reduction'],
+                        '年間放電量(MWh)': result['annual_discharge'] / 1000,
+                        'サイクル制約達成': 'OK' if result['annual_cycle_constraint_satisfied'] else 'NG'
+                    })
                 
-                seasonal_detail_df = pd.DataFrame(seasonal_detail_data)
-                seasonal_csv = seasonal_detail_df.to_csv(index=False)
+                soc_stats_df = pd.DataFrame(soc_stats_data)
+                soc_stats_csv = soc_stats_df.to_csv(index=False)
                 
                 st.download_button(
-                    label="季節別統計をダウンロード",
-                    data=seasonal_csv,
-                    file_name=f"annual_seasonal_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    label="SOC統計をダウンロード",
+                    data=soc_stats_csv,
+                    file_name=f"annual_soc_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    key="download_seasonal_detail_csv"
+                    key="download_soc_stats_csv"
                 )
             except Exception as e:
-                st.error(f"季節別CSV生成エラー: {e}")
+                st.error(f"SOC統計CSV生成エラー: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    main() 
