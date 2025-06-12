@@ -1318,17 +1318,17 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
             )
             
             # 下段：SOCデータ
-            fig_demand.add_trace(
-                go.Scatter(
-                    x=period_times,
-                    y=period_soc,
-                    name="SOC推移",
-                    line=dict(color="green", width=2),
-                    fill='tonexty',
-                    fillcolor='rgba(0,255,0,0.1)'
-                ),
-                row=2, col=1
-            )
+fig_demand.add_trace(
+    go.Scatter(
+        x=period_times,
+        y=period_soc,
+        name="SOC推移",
+        line=dict(color="green", width=2),
+        fill='tozeroy',  # または fill=None
+        fillcolor='rgba(0,255,0,0.1)'
+    ),
+    row=2, col=1
+)
             
             # SOC限界値の表示
             fig_demand.add_hline(y=90, line_dash="dash", line_color="red", 
