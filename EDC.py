@@ -281,19 +281,33 @@ class UnitCommitmentSolver:
                     total_cap += gen.max_output
                     continue
                 
-                # 最小停止時間チェック
+                # 最小停止時間チェック（厳密実装）
                 if prev_flags[j] == 0:
-                    # 最後に運転していた時刻を探索
-                    last_run_step = -1
+                    # 最後に停止した時刻を探索
+                    last_stop_step = -1
                     for back in range(i - 1, -1, -1):
                         if output_flags[j, back] == 1:
-                            last_run_step = back
+                            last_stop_step = back + 1  # 停止開始時刻
                             break
                     
-                    if last_run_step > 0 and (i - last_run_step) < min_stop_steps[j]:
-                        # 最小停止時間未達の場合、需要不足でなければスキップ
-                        if total_cap >= future_demand * (1 + margin):
+                    # 初期状態（最初から停止）の場合
+                    if last_stop_step == -1:
+                        last_stop_step = 0
+                    
+                    # 停止継続時間をチェック
+                    stop_duration = i - last_stop_step
+                    if stop_duration < min_stop_steps[j]:
+                        # 最小停止時間未達の場合、緊急時以外は起動禁止
+                        reserve_shortfall = demand * (1 + margin) - total_cap
+                        if reserve_shortfall <= 1000:  # 緊急起動閾値
+                            step_debug['actions'].append(
+                                f"{gen.name}: 最小停止時間未達により起動見送り (停止{stop_duration}ステップ < 必要{min_stop_steps[j]}ステップ)"
+                            )
                             continue
+                        else:
+                            step_debug['actions'].append(
+                                f"{gen.name}: 最小停止時間未達だが緊急起動 (予備力不足{reserve_shortfall:.0f}kW)"
+                            )
                 
                 # 起動判定条件
                 started = False
@@ -305,6 +319,7 @@ class UnitCommitmentSolver:
                         target_flags[j] = 1
                         total_cap += gen.max_output
                         started = True
+                        step_debug['actions'].append(f"{gen.name}: 急激な需要上昇により起動")
                 
                 # 条件2: 通常起動（将来需要予測ベース）
                 if not started:
@@ -312,6 +327,7 @@ class UnitCommitmentSolver:
                         target_flags[j] = 1
                         total_cap += gen.max_output
                         started = True
+                        step_debug['actions'].append(f"{gen.name}: 将来需要予測により起動")
                 
                 # 条件3: 緊急起動（予備力不足）
                 if not started:
@@ -320,6 +336,7 @@ class UnitCommitmentSolver:
                         target_flags[j] = 1
                         total_cap += gen.max_output
                         started = True
+                        step_debug['actions'].append(f"{gen.name}: 緊急起動 (予備力不足: {reserve_margin:.0f}kW)")
             
             # 初回断面の処理
             if i == 0:
@@ -423,26 +440,46 @@ class UnitCommitmentSolver:
                 
                 # 状態0 → 状態2への遷移（起動）
                 if prev_flags[j] == 0 and final_flags[j] == 1:
-                    # 最小停止時間の最終チェック
-                    stop_count = 0
+                    # 最小停止時間の最終チェック（二重チェック）
+                    last_stop_step = -1
                     for back in range(i - 1, -1, -1):
-                        if output_flags[j, back] == 0:
-                            stop_count += 1
-                        else:
+                        if output_flags[j, back] == 1:
+                            last_stop_step = back + 1
                             break
                     
-                    if stop_count < min_stop_steps[j]:
-                        output_flags[j, i] = 0
-                        prev_flags[j] = 0
-                    else:
-                        # 起動処理（状態2 → 2 → 1）
-                        output_flags[j, i] = 2
-                        if i + 1 < self.time_steps:
-                            output_flags[j, i + 1] = 2
-                        if i + 2 < self.time_steps:
-                            output_flags[j, i + 2] = 1
-                        last_start[j] = i
-                        prev_flags[j] = 2
+                    if last_stop_step == -1:
+                        last_stop_step = 0
+                    
+                    stop_duration = i - last_stop_step
+                    
+                    if stop_duration < min_stop_steps[j]:
+                        # 緊急時でない限り起動禁止
+                        current_reserve = 0
+                        for k, other_gen in enumerate(sorted_generators):
+                            if output_flags[k, i-1] == 1 or (k < j and final_flags[k] == 1):
+                                current_reserve += other_gen.max_output
+                        
+                        if current_reserve >= demand * 1.05:  # 5%以上の余裕がある場合
+                            output_flags[j, i] = 0
+                            prev_flags[j] = 0
+                            step_debug['actions'].append(
+                                f"{gen.name}: 最小停止時間制約により起動キャンセル (停止{stop_duration}ステップ < 必要{min_stop_steps[j]}ステップ)"
+                            )
+                            continue
+                        else:
+                            step_debug['actions'].append(
+                                f"{gen.name}: 最小停止時間未達だが供給力不足により強制起動"
+                            )
+                    
+                    # 起動処理（状態2 → 2 → 1）
+                    output_flags[j, i] = 2
+                    if i + 1 < self.time_steps:
+                        output_flags[j, i + 1] = 2
+                    if i + 2 < self.time_steps:
+                        output_flags[j, i + 2] = 1
+                    last_start[j] = i
+                    prev_flags[j] = 2
+                    step_debug['actions'].append(f"{gen.name}: 起動開始")
                 
                 # 状態2の継続処理
                 elif prev_flags[j] == 2:
@@ -1099,21 +1136,21 @@ def create_summary_metrics(uc_result: Dict, ed_result: Dict = None) -> Dict:
 def get_default_generator_config(index: int) -> dict:
     """デフォルト発電機設定を取得"""
     defaults = {
-        0: {"name": "DG3", "type": "DG", "min": 5000, "max": 10000, "priority": 1, 
+        0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
             "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420},
-        1: {"name": "DG4", "type": "DG", "min": 5000, "max": 10000, "priority": 2, 
+        1: {"name": "DG4", "type": "DG", "min": 1200, "max": 4000, "priority": 2, 
             "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103},
-        2: {"name": "DG5", "type": "DG", "min": 7500, "max": 15000, "priority": 3, 
+        2: {"name": "DG5", "type": "DG", "min": 1500, "max": 5000, "priority": 3, 
             "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300},
-        3: {"name": "DG6", "type": "DG", "min": 6000, "max": 12000, "priority": 4, 
+        3: {"name": "DG6", "type": "DG", "min": 800, "max": 2500, "priority": 4, 
             "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
-        4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
+        4: {"name": "DG7", "type": "DG", "min": 2000, "max": 6000, "priority": 5, 
             "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
-        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
+        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
+        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
+        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
     }
     
@@ -1126,21 +1163,21 @@ def get_default_generator_config(index: int) -> dict:
 def main():
     """デフォルト発電機設定を取得"""
     defaults = {
-        0: {"name": "DG3", "type": "DG", "min": 5000, "max": 10000, "priority": 1, 
+        0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
             "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420},
-        1: {"name": "DG4", "type": "DG", "min": 5000, "max": 10000, "priority": 2, 
+        1: {"name": "DG4", "type": "DG", "min": 1200, "max": 4000, "priority": 2, 
             "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103},
-        2: {"name": "DG5", "type": "DG", "min": 7500, "max": 15000, "priority": 3, 
+        2: {"name": "DG5", "type": "DG", "min": 1500, "max": 5000, "priority": 3, 
             "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300},
-        3: {"name": "DG6", "type": "DG", "min": 6000, "max": 12000, "priority": 4, 
+        3: {"name": "DG6", "type": "DG", "min": 800, "max": 2500, "priority": 4, 
             "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
-        4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
+        4: {"name": "DG7", "type": "DG", "min": 2000, "max": 6000, "priority": 5, 
             "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
-        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
+        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
+        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
-        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
+        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
             "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
     }
     
