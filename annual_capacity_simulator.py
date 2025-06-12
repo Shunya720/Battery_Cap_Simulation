@@ -2012,7 +2012,6 @@ def show_capacity_recommendation(results, capacity_list):
                 'ピーク削減スコア': f"{peak_score:.1f}",
                 '容量効率スコア': f"{efficiency_score:.1f}",
                 'サイクル制約スコア': f"{cycle_score * 0.2:.1f}",
-                'SOC安定性スコア': f"{soc_stability_score:.1f}",
                 '季節バランススコア': f"{seasonal_balance_score:.1f}",
                 '総合スコア': f"{total_score:.1f}"
             })
