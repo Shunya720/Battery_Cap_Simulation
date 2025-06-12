@@ -337,6 +337,185 @@ class UnitCommitmentSolver:
         
     def set_demand_data(self, demand_data: np.ndarray):
         self.demand_data = demand_data[:self.time_steps]
+    
+    def calculate_minimum_units_required(self, demand: float, sorted_generators: List[GeneratorConfig], 
+                                       margin_rate: float = 0.0) -> Tuple[int, List[int], Dict]:
+        """
+        需要に対する最低稼働台数と対象発電機を計算
+        
+        Returns:
+            - 最低必要台数
+            - 選択された発電機のインデックスリスト
+            - 詳細情報辞書
+        """
+        target_capacity = demand * (1 + margin_rate)
+        selected_units = []
+        cumulative_capacity = 0.0
+        cumulative_min_output = 0.0
+        
+        analysis = {
+            'demand': demand,
+            'target_capacity': target_capacity,
+            'margin_rate': margin_rate,
+            'selection_process': [],
+            'feasibility_check': True,
+            'capacity_shortage': 0.0,
+            'min_output_excess': 0.0
+        }
+        
+        # 優先順位順に発電機を選択
+        for i, gen in enumerate(sorted_generators):
+            # マストランユニットは必須
+            if gen.is_must_run:
+                selected_units.append(i)
+                cumulative_capacity += gen.max_output
+                cumulative_min_output += gen.min_output
+                analysis['selection_process'].append({
+                    'unit': gen.name,
+                    'reason': 'マストラン',
+                    'capacity_after': cumulative_capacity,
+                    'min_output_after': cumulative_min_output
+                })
+                continue
+            
+            # 容量不足の場合は追加
+            if cumulative_capacity < target_capacity:
+                selected_units.append(i)
+                cumulative_capacity += gen.max_output
+                cumulative_min_output += gen.min_output
+                analysis['selection_process'].append({
+                    'unit': gen.name,
+                    'reason': f'容量不足 ({cumulative_capacity - gen.max_output:.0f} < {target_capacity:.0f})',
+                    'capacity_after': cumulative_capacity,
+                    'min_output_after': cumulative_min_output
+                })
+            else:
+                # 十分な容量があるが、最小出力制約をチェック
+                break
+        
+        # 最小出力が需要を上回る場合の実現可能性チェック
+        if cumulative_min_output > demand:
+            analysis['feasibility_check'] = False
+            analysis['min_output_excess'] = cumulative_min_output - demand
+            
+            # 最小出力制約を満たすために発電機を減らせるかチェック
+            min_required_units = self._find_minimum_feasible_combination(
+                demand, sorted_generators, selected_units
+            )
+            if min_required_units:
+                selected_units = min_required_units
+                cumulative_capacity = sum(sorted_generators[i].max_output for i in selected_units)
+                cumulative_min_output = sum(sorted_generators[i].min_output for i in selected_units)
+                analysis['feasibility_check'] = True
+                analysis['min_output_excess'] = max(0, cumulative_min_output - demand)
+                analysis['selection_process'].append({
+                    'unit': 'システム調整',
+                    'reason': '最小出力制約による組み合わせ最適化',
+                    'capacity_after': cumulative_capacity,
+                    'min_output_after': cumulative_min_output
+                })
+        
+        # 容量不足チェック
+        if cumulative_capacity < target_capacity:
+            analysis['capacity_shortage'] = target_capacity - cumulative_capacity
+        
+        return len(selected_units), selected_units, analysis
+    
+    def _find_minimum_feasible_combination(self, demand: float, sorted_generators: List[GeneratorConfig], 
+                                         initial_selection: List[int]) -> List[int]:
+        """最小出力制約を満たす最小の発電機組み合わせを探索"""
+        from itertools import combinations
+        
+        # マストランユニットは必須
+        must_run_units = [i for i in initial_selection if sorted_generators[i].is_must_run]
+        optional_units = [i for i in initial_selection if not sorted_generators[i].is_must_run]
+        
+        must_run_min = sum(sorted_generators[i].min_output for i in must_run_units)
+        must_run_max = sum(sorted_generators[i].max_output for i in must_run_units)
+        
+        # マストランだけで需要を満たせるかチェック
+        if must_run_max >= demand and must_run_min <= demand:
+            return must_run_units
+        
+        # オプションユニットとの組み合わせを試行
+        for r in range(len(optional_units) + 1):
+            for combo in combinations(optional_units, r):
+                test_units = must_run_units + list(combo)
+                total_min = sum(sorted_generators[i].min_output for i in test_units)
+                total_max = sum(sorted_generators[i].max_output for i in test_units)
+                
+                if total_min <= demand <= total_max:
+                    return test_units
+        
+        return initial_selection  # 実現可能な組み合わせが見つからない場合
+    
+    def validate_unit_commitment_feasibility(self, demand_data: np.ndarray, 
+                                           output_flags: np.ndarray) -> Dict:
+        """構成計算結果の実現可能性を検証"""
+        sorted_generators = sorted(self.generators, key=lambda x: x.priority)
+        validation_results = {
+            'overall_feasible': True,
+            'infeasible_periods': [],
+            'warnings': [],
+            'statistics': {
+                'total_periods': len(demand_data),
+                'feasible_periods': 0,
+                'min_output_violations': 0,
+                'capacity_shortages': 0
+            }
+        }
+        
+        for t in range(len(demand_data)):
+            demand = demand_data[t]
+            period_analysis = {
+                'time_step': t,
+                'hour': (t * 0.25) % 24,
+                'demand': demand,
+                'issues': []
+            }
+            
+            # 運転中発電機の容量チェック
+            running_units = []
+            total_min_output = 0.0
+            total_max_output = 0.0
+            
+            for i, gen in enumerate(sorted_generators):
+                if output_flags[i, t] == 1:  # 運転中
+                    running_units.append(i)
+                    total_min_output += gen.min_output
+                    total_max_output += gen.max_output
+            
+            # 実現可能性チェック
+            is_feasible = True
+            
+            # 容量不足チェック
+            if total_max_output < demand:
+                period_analysis['issues'].append(
+                    f"容量不足: 最大出力{total_max_output:.0f}kW < 需要{demand:.0f}kW"
+                )
+                validation_results['statistics']['capacity_shortages'] += 1
+                is_feasible = False
+            
+            # 最小出力超過チェック
+            if total_min_output > demand:
+                period_analysis['issues'].append(
+                    f"最小出力超過: 最小出力{total_min_output:.0f}kW > 需要{demand:.0f}kW"
+                )
+                validation_results['statistics']['min_output_violations'] += 1
+                is_feasible = False
+            
+            if is_feasible:
+                validation_results['statistics']['feasible_periods'] += 1
+            else:
+                validation_results['overall_feasible'] = False
+                validation_results['infeasible_periods'].append(period_analysis)
+        
+        # 統計情報の追加
+        total_periods = validation_results['statistics']['total_periods']
+        feasible_rate = (validation_results['statistics']['feasible_periods'] / total_periods) * 100
+        validation_results['statistics']['feasibility_rate'] = feasible_rate
+        
+        return validation_results
         
     def get_time_based_margin(self, time_step: int) -> Tuple[float, float]:
         """時間帯別マージン設定（17:00-22:00がピーク）"""
@@ -403,72 +582,93 @@ class UnitCommitmentSolver:
                 'actions': []
             }
             
-            # === 起動判定処理 ===
+            # === 起動判定処理（最低稼働台数ロジック統合） ===
+            
+            # 現在時刻の最低必要台数を計算
+            margin_dg, margin_gt = self.get_time_based_margin(i)
+            current_margin = max(margin_dg, margin_gt)  # より厳しいマージンを採用
+            
+            min_units_required, required_unit_indices, capacity_analysis = self.calculate_minimum_units_required(
+                demand, sorted_generators, current_margin
+            )
+            
+            # 将来需要での最低必要台数も計算
+            future_min_units, future_required_indices, future_analysis = self.calculate_minimum_units_required(
+                future_demand, sorted_generators, current_margin
+            )
+            
+            step_debug['capacity_analysis'] = {
+                'current': capacity_analysis,
+                'future': future_analysis,
+                'min_units_current': min_units_required,
+                'min_units_future': future_min_units
+            }
+            
+            # 最低必要台数に基づく起動判定
+            target_flags = np.zeros(gen_count, dtype=int)
+            total_cap = 0
+            
+            # 現在および将来の必要台数の最大値を取る
+            required_indices = list(set(required_unit_indices + future_required_indices))
+            
             for j, gen in enumerate(sorted_generators):
-                margin = margin_gt if gen.unit_type == "GT" else margin_dg
-                
                 # マストランユニットは常時運転
                 if gen.is_must_run:
                     target_flags[j] = 1
                     total_cap += gen.max_output
+                    step_debug['actions'].append(f"{gen.name}: マストラン運転")
                     continue
                 
-                # 最小停止時間チェック（厳密実装）
-                if prev_flags[j] == 0:
-                    # 最後に停止した時刻を探索
-                    last_stop_step = -1
-                    for back in range(i - 1, -1, -1):
-                        if output_flags[j, back] == 1:
-                            last_stop_step = back + 1  # 停止開始時刻
-                            break
+                # 最低必要台数に含まれる場合
+                if j in required_indices:
+                    # 最小停止時間チェック（厳密実装）
+                    can_start = True
+                    if prev_flags[j] == 0:
+                        # 最後に停止した時刻を探索
+                        last_stop_step = -1
+                        for back in range(i - 1, -1, -1):
+                            if output_flags[j, back] == 1:
+                                last_stop_step = back + 1  # 停止開始時刻
+                                break
+                        
+                        if last_stop_step == -1:
+                            last_stop_step = 0
+                        
+                        # 停止継続時間をチェック
+                        stop_duration = i - last_stop_step
+                        if stop_duration < min_stop_steps[j]:
+                            # 容量不足の緊急時のみ最小停止時間を無視
+                            if not capacity_analysis.get('capacity_shortage', 0) > 1000:
+                                can_start = False
+                                step_debug['actions'].append(
+                                    f"{gen.name}: 必要だが最小停止時間未達により起動見送り (停止{stop_duration}ステップ < 必要{min_stop_steps[j]}ステップ)"
+                                )
                     
-                    # 初期状態（最初から停止）の場合
-                    if last_stop_step == -1:
-                        last_stop_step = 0
-                    
-                    # 停止継続時間をチェック
-                    stop_duration = i - last_stop_step
-                    if stop_duration < min_stop_steps[j]:
-                        # 最小停止時間未達の場合、緊急時以外は起動禁止
-                        reserve_shortfall = demand * (1 + margin) - total_cap
-                        if reserve_shortfall <= 1000:  # 緊急起動閾値
-                            step_debug['actions'].append(
-                                f"{gen.name}: 最小停止時間未達により起動見送り (停止{stop_duration}ステップ < 必要{min_stop_steps[j]}ステップ)"
-                            )
-                            continue
+                    if can_start:
+                        target_flags[j] = 1
+                        total_cap += gen.max_output
+                        if j in required_unit_indices:
+                            step_debug['actions'].append(f"{gen.name}: 現在需要により必要起動")
                         else:
-                            step_debug['actions'].append(
-                                f"{gen.name}: 最小停止時間未達だが緊急起動 (予備力不足{reserve_shortfall:.0f}kW)"
-                            )
+                            step_debug['actions'].append(f"{gen.name}: 将来需要により予防起動")
                 
-                # 起動判定条件
-                started = False
-                
-                # 条件1: 急上昇によるGT起動
-                if i >= 1 and gen.unit_type == "GT":
-                    prev_demand = self.demand_data[i - 1]
-                    if (demand - prev_demand) > 3000 and total_cap < demand * (1 + margin):
-                        target_flags[j] = 1
-                        total_cap += gen.max_output
-                        started = True
-                        step_debug['actions'].append(f"{gen.name}: 急激な需要上昇により起動")
-                
-                # 条件2: 通常起動（将来需要予測ベース）
-                if not started:
-                    if total_cap < future_demand * (1 + margin):
-                        target_flags[j] = 1
-                        total_cap += gen.max_output
-                        started = True
-                        step_debug['actions'].append(f"{gen.name}: 将来需要予測により起動")
-                
-                # 条件3: 緊急起動（予備力不足）
-                if not started:
-                    reserve_margin = total_cap - demand
-                    if reserve_margin < 1000:
-                        target_flags[j] = 1
-                        total_cap += gen.max_output
-                        started = True
-                        step_debug['actions'].append(f"{gen.name}: 緊急起動 (予備力不足: {reserve_margin:.0f}kW)")
+                # 追加の起動判定（従来ロジック）
+                else:
+                    # 条件1: 急上昇によるGT起動
+                    if i >= 1 and gen.unit_type == "GT":
+                        prev_demand = self.demand_data[i - 1]
+                        if (demand - prev_demand) > 3000 and total_cap < demand * (1 + current_margin):
+                            target_flags[j] = 1
+                            total_cap += gen.max_output
+                            step_debug['actions'].append(f"{gen.name}: 急激な需要上昇により起動")
+                    
+                    # 条件2: 緊急起動（予備力不足）
+                    elif total_cap > 0:  # 他に運転中の発電機がある場合のみ
+                        reserve_margin = total_cap - demand
+                        if reserve_margin < 1000:
+                            target_flags[j] = 1
+                            total_cap += gen.max_output
+                            step_debug['actions'].append(f"{gen.name}: 緊急起動 (予備力不足: {reserve_margin:.0f}kW)")
             
             # 初回断面の処理
             if i == 0:
@@ -636,6 +836,9 @@ class UnitCommitmentSolver:
                     output_flags[j, i] = prev_flags[j]
                     prev_flags[j] = output_flags[j, i]
         
+        # 構成計算結果の実現可能性検証
+        feasibility_validation = self.validate_unit_commitment_feasibility(self.demand_data, output_flags)
+        
         # 結果をまとめて返す
         result = {
             'generators': sorted_generators,
@@ -643,6 +846,7 @@ class UnitCommitmentSolver:
             'demand_data': self.demand_data,
             'time_steps': self.time_steps,
             'debug_info': debug_info,
+            'feasibility_validation': feasibility_validation,
             'margins': {
                 'dg_start': self.margin_rate_dg,
                 'gt_start': self.margin_rate_gt,
@@ -1789,6 +1993,46 @@ def main():
         
         # レポートプレビュー機能
         st.subheader("📄 レポートプレビュー")
+        
+        # 実現可能性検証結果の表示
+        if 'feasibility_validation' in uc_result:
+            validation = uc_result['feasibility_validation']
+            
+            st.subheader("🔍 構成計算実現可能性検証")
+            
+            # 全体結果
+            if validation['overall_feasible']:
+                st.success("✅ 全期間で実現可能な構成計算結果です")
+            else:
+                st.error(f"❌ {len(validation['infeasible_periods'])}期間で実現不可能な構成があります")
+            
+            # 統計情報
+            stats = validation['statistics']
+            val_col1, val_col2, val_col3, val_col4 = st.columns(4)
+            
+            with val_col1:
+                st.metric("総期間", f"{stats['total_periods']} 期間")
+            with val_col2:
+                st.metric("実現可能期間", f"{stats['feasible_periods']} 期間")
+            with val_col3:
+                st.metric("実現可能率", f"{stats['feasibility_rate']:.1f}%")
+            with val_col4:
+                feasible_periods = stats['feasible_periods']
+                total_periods = stats['total_periods']
+                delta = feasible_periods - (total_periods - feasible_periods)
+                st.metric("実現性指標", "良好" if stats['feasibility_rate'] > 95 else "要改善", 
+                         delta=f"{delta} 期間差")
+            
+            # 問題期間の詳細表示
+            if validation['infeasible_periods']:
+                with st.expander(f"⚠️ 問題期間の詳細 ({len(validation['infeasible_periods'])}件)"):
+                    for period in validation['infeasible_periods'][:10]:  # 最初の10件のみ表示
+                        st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
+                        for issue in period['issues']:
+                            st.write(f"  - {issue}")
+                    
+                    if len(validation['infeasible_periods']) > 10:
+                        st.write(f"... 他{len(validation['infeasible_periods']) - 10}件")
         
         if st.button("🔍 詳細レポートをプレビュー", use_container_width=True):
             with st.spinner("レポート生成中..."):
