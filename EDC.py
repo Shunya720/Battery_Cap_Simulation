@@ -902,10 +902,10 @@ def main():
         
         # Unit Commitment設定
         st.subheader("📋 構成計算設定")
-        margin_dg = st.slider("DGマージン率 (%)", 0, 30, 10) / 100
-        margin_gt = st.slider("GTマージン率 (%)", 0, 30, 15) / 100
-        stop_margin_dg = st.slider("DG解列マージン率 (%)", 0, 20, 5) / 100
-        stop_margin_gt = st.slider("GT解列マージン率 (%)", 0, 20, 8) / 100
+        margin_dg = st.slider("DGマージン率 (%)", 0, 30, 10, key="margin_dg_slider") / 100
+        margin_gt = st.slider("GTマージン率 (%)", 0, 30, 15, key="margin_gt_slider") / 100
+        stop_margin_dg = st.slider("DG解列マージン率 (%)", 0, 20, 5, key="stop_margin_dg_slider") / 100
+        stop_margin_gt = st.slider("GT解列マージン率 (%)", 0, 20, 8, key="stop_margin_gt_slider") / 100
         
         st.session_state.solver.margin_rate_dg = margin_dg
         st.session_state.solver.margin_rate_gt = margin_gt
@@ -914,9 +914,9 @@ def main():
         
         # Economic Dispatch設定
         st.subheader("⚡ 経済配分設定")
-        lambda_min = st.number_input("λ最小値", value=0.0, step=1.0)
-        lambda_max = st.number_input("λ最大値", value=100.0, step=1.0)
-        lambda_tolerance = st.number_input("λ許容誤差 (kW)", value=0.001, step=0.001, format="%.3f")
+        lambda_min = st.number_input("λ最小値", value=0.0, step=1.0, key="lambda_min_input")
+        lambda_max = st.number_input("λ最大値", value=100.0, step=1.0, key="lambda_max_input")
+        lambda_tolerance = st.number_input("λ許容誤差 (kW)", value=0.001, step=0.001, format="%.3f", key="lambda_tolerance_input")
         
         st.session_state.ed_solver.lambda_min = lambda_min
         st.session_state.ed_solver.lambda_max = lambda_max
@@ -949,8 +949,8 @@ def main():
                 st.dataframe(df.head(10))
                 
                 # 列選択
-                time_column = st.selectbox("時刻列を選択", df.columns, index=0)
-                demand_column = st.selectbox("需要データ列を選択", df.columns, index=1)
+                time_column = st.selectbox("時刻列を選択", df.columns, index=0, key="time_column_select")
+                demand_column = st.selectbox("需要データ列を選択", df.columns, index=1, key="demand_column_select")
                 
                 if len(df) >= 96:
                     try:
@@ -989,7 +989,7 @@ def main():
     st.header("🔧 発電機設定")
     
     # 発電機数設定
-    num_generators = st.number_input("発電機台数", min_value=1, max_value=20, value=8)
+    num_generators = st.number_input("発電機台数", min_value=1, max_value=20, value=8, key="num_generators_input")
     
     # 発電機設定フォーム
     generators_config = []
@@ -1211,8 +1211,8 @@ def main():
             st.subheader("📝 計算プロセス詳細")
             
             # 時間範囲選択
-            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0, step=1)
-            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23, step=1)
+            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0, step=1, key="debug_start_hour")
+            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23, step=1, key="debug_end_hour")
             
             debug_info = uc_result.get('debug_info', [])
             
