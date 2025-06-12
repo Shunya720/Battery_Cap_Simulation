@@ -806,8 +806,8 @@ def show_simulation_config_section():
     with col1:
         st.session_state.sim_power_scaling_method = st.selectbox(
             "最大出力決定方法",
-            ["capacity_ratio", "custom", "individual"],
-            index=["capacity_ratio", "custom", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "custom", "individual"] else 0,
+            ["capacity_ratio",  "individual"],
+            index=["capacity_ratio", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "individual"] else 0,
             format_func=lambda x: {
                 "capacity_ratio": "容量比例（容量÷16）",
                 "individual": "個別入力"
@@ -818,8 +818,6 @@ def show_simulation_config_section():
     with col2:
         if st.session_state.sim_power_scaling_method == "capacity_ratio":
             st.info("各容量を16で割った値を最大出力とします")
-        elif st.session_state.sim_power_scaling_method == "custom":
-            st.info("各容量を20で割った値を最大出力とします")
         elif st.session_state.sim_power_scaling_method == "individual":
             st.info("各容量に対して個別に最大出力を設定します")
     
