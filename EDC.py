@@ -1085,6 +1085,49 @@ def get_default_generator_config(index: int) -> dict:
             missing.append("発電機設定")
         st.warning(f"⚠️ 以下の設定が必要です: {', '.join(missing)}")
     
+    # 3. 計算実行
+    st.header("⚡ 構成計算・経済配分実行")
+    
+    if st.session_state.demand_loaded and st.session_state.generators_configured:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔧 構成計算のみ実行", type="secondary"):
+                with st.spinner("構成計算中..."):
+                    try:
+                        result = st.session_state.solver.solve_unit_commitment()
+                        st.session_state.uc_result = result
+                        st.success("✅ 構成計算完了！")
+                    except Exception as e:
+                        st.error(f"❌ 構成計算エラー: {e}")
+        
+        with col2:
+            if st.button("🚀 構成計算＋経済配分実行", type="primary"):
+                with st.spinner("計算中..."):
+                    try:
+                        # 構成計算
+                        uc_result = st.session_state.solver.solve_unit_commitment()
+                        st.session_state.uc_result = uc_result
+                        
+                        # 経済配分計算
+                        ed_result = st.session_state.ed_solver.solve_economic_dispatch(
+                            uc_result['generators'],
+                            uc_result['demand_data'],
+                            uc_result['output_flags']
+                        )
+                        st.session_state.ed_result = ed_result
+                        
+                        st.success("✅ 構成計算＋経済配分完了！")
+                    except Exception as e:
+                        st.error(f"❌ 計算エラー: {e}")
+    else:
+        missing = []
+        if not st.session_state.demand_loaded:
+            missing.append("需要データ")
+        if not st.session_state.generators_configured:
+            missing.append("発電機設定")
+        st.warning(f"⚠️ 以下の設定が必要です: {', '.join(missing)}")
+    
     # 4. 結果表示
     if 'uc_result' in st.session_state and st.session_state.uc_result:
         st.header("📈 計算結果")
