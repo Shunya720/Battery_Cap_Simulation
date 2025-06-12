@@ -775,7 +775,7 @@ def show_simulation_config_section():
             - 並列処理: {'有効' if st.session_state.sim_use_parallel else '無効'}
             
             約 {estimated_time/60:.1f}分 〜 {estimated_time/30:.1f}分
-            """)
+            "")
     
     # 年間シミュレーション実行ボタン
     col1, col2, col3 = st.columns([1, 2, 1])
