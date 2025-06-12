@@ -459,7 +459,7 @@ def main():
             with col2:
                 capacity_optimization_trials = st.slider(
                     "最適化試行回数（容量別）",
-                    min_value=30, max_value=100, value=50, step=10,
+                    min_value=30, max_value=500, value=50, step=10,
                     help="容量別最適化の試行回数"
                 )
                 
