@@ -924,7 +924,7 @@ def main():
     
     # 1. 需要データアップロード
     st.header("📊 需要予測データアップロード")
-    uploaded_file = st.file_uploader("需要予測CSV（96ステップ、15分間隔）", type=['csv'])
+    uploaded_file = st.file_uploader("需要予測CSV（96ステップ、15分間隔）", type=['csv'], key="demand_csv_uploader")
     
     if uploaded_file is not None:
         try:
