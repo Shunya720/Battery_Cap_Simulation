@@ -1995,10 +1995,6 @@ def show_capacity_recommendation(results, capacity_list):
             efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25 if capacity > 0 else 0
             cycle_score = 100 if result.get('annual_cycle_constraint_satisfied', False) else 0
             
-            # SOC安定性スコア（SOC変化が小さい方が良い）
-            soc_stats = result.get('soc_stats', {})
-            soc_change = abs(soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50))
-            soc_stability_score = max(0, 10 - soc_change) * 0.1  # SOC変化10%以下で満点
             
             # 季節バランススコア（標準偏差が小さい方が良い）
             seasonal_values = [
