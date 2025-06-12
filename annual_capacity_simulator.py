@@ -273,10 +273,13 @@ class AnnualBatteryCapacityComparator:
             try:
                 st.write(f"容量 {capacity:,}kWh の年間最適化開始 ({i+1}/{len(capacity_list)}) - SOC引き継ぎあり")
                 
-                # 容量に応じた設定
-                annual_cycle_target = int(capacity * cycle_target_ratio)
-                daily_cycle_target = annual_cycle_target / 365  # 日別サイクル目標
-                daily_cycle_tolerance = cycle_tolerance / 365   # 日別許容範囲
+                # 容量に応じた設定（回数ベースに変更）
+                annual_cycle_target = int(capacity * cycle_target_ratio)  # 目標放電量(kWh)
+                daily_cycle_target = annual_cycle_target / 365  # 日別サイクル目標(kWh)
+                
+                # 許容範囲をkWh換算（回数 × 容量）
+                cycle_tolerance_kwh = cycle_tolerance * capacity  # 回数 → kWh換算
+                daily_cycle_tolerance = cycle_tolerance_kwh / 365   # 日別許容範囲(kWh)
                 
                 # 最大出力設定
                 if power_scaling_method == 'capacity_ratio':
@@ -361,6 +364,14 @@ class AnnualBatteryCapacityComparator:
                 annual_battery_output = np.array(annual_battery_output)
                 annual_demand_after_control = np.array(annual_demand_after_control)
                 annual_soc_profile = np.array(annual_soc_profile)
+
+                # 実際のサイクル数計算
+                actual_discharge_kwh = -np.sum(annual_battery_output[annual_battery_output < 0]) if len(annual_battery_output) > 0 else 0
+                actual_cycles = actual_discharge_kwh / capacity if capacity > 0 else 0
+                target_cycles = cycle_target_ratio
+                
+                # サイクル制約満足判定（回数ベース）
+                cycle_constraint_satisfied = abs(actual_cycles - target_cycles) <= cycle_tolerance
                 
                 # SOC統計
                 soc_stats = {
@@ -386,7 +397,8 @@ class AnnualBatteryCapacityComparator:
                 self.comparison_results[capacity] = {
                     'capacity': capacity,
                     'max_power': max_power,
-                    'annual_cycle_target': annual_cycle_target,
+                    'annual_cycle_target': annual_cycle_target,  # kWh
+                    'annual_cycle_target_cycles': target_cycles,  # 回数
                     'daily_cycle_target': daily_cycle_target,
                     'battery_output': annual_battery_output,
                     'soc_profile': annual_soc_profile,
@@ -395,12 +407,14 @@ class AnnualBatteryCapacityComparator:
                     'annual_peak_reduction': (np.max(validated_demand) - np.max(annual_demand_after_control)) if len(annual_demand_after_control) > 0 else 0,
                     'annual_range_improvement': ((np.max(validated_demand) - np.min(validated_demand)) - 
                                               (np.max(annual_demand_after_control) - np.min(annual_demand_after_control))) if len(annual_demand_after_control) > 0 else 0,
-                    'annual_discharge': -np.sum(annual_battery_output[annual_battery_output < 0]) if len(annual_battery_output) > 0 else 0,
-                    'annual_cycle_constraint_satisfied': abs(-np.sum(annual_battery_output[annual_battery_output < 0]) - annual_cycle_target) <= cycle_tolerance if len(annual_battery_output) > 0 else False,
+                    'annual_discharge': actual_discharge_kwh,
+                    'annual_cycles_actual': actual_cycles,  # 実際のサイクル数
+                    'annual_cycle_constraint_satisfied': cycle_constraint_satisfied,  # 回数ベースで判定
+                    'cycle_tolerance_cycles': cycle_tolerance,  # 許容回数
                     'daily_results': daily_results_for_capacity,
                     'monthly_summary': monthly_summary,
                     'seasonal_stats': self._calculate_seasonal_stats(validated_demand, annual_demand_after_control, monthly_summary),
-                    'soc_stats': soc_stats  # SOC統計を追加
+                    'soc_stats': soc_stats
                 }
                 
                 self.daily_results[capacity] = daily_results_for_capacity
@@ -482,8 +496,13 @@ class AnnualBatteryCapacityComparator:
         summary = []
         for capacity, result in self.comparison_results.items():
             # サイクル制約の目標と実績
-            cycle_target = result.get('annual_cycle_target', 0)
-            cycle_actual = result.get('annual_discharge', 0)
+            target_cycles = result.get('annual_cycle_target_cycles', 0)
+            actual_cycles = result.get('annual_cycles_actual', 0)
+            tolerance_cycles = result.get('cycle_tolerance_cycles', 0)
+
+            # サイクル制約達成状況
+            cycle_diff = abs(actual_cycles - target_cycles)
+            cycle_status = "達成" if cycle_diff <= tolerance_cycles else "未達成"
             
             # サイクル数計算（放電量 ÷ 容量）
             target_cycles = cycle_target / capacity if capacity > 0 else 0
@@ -498,10 +517,11 @@ class AnnualBatteryCapacityComparator:
                 '年間ピーク削減(kW)': f"{result['annual_peak_reduction']:.1f}",
                 '年間需要幅改善(kW)': f"{result['annual_range_improvement']:.1f}",
                 '年間放電量(MWh)': f"{result['annual_discharge']/1000:.1f}",
-                'サイクル制約目標(MWh)': f"{cycle_target/1000:.1f}",
-                'サイクル制約実績(MWh)': f"{cycle_actual/1000:.1f}",
-                'サイクル数目標': f"{target_cycles:.0f}回",
-                'サイクル数実績': f"{actual_cycles:.0f}回",
+                'サイクル数目標(回)': f"{target_cycles:.0f}",
+                'サイクル数実績(回)': f"{actual_cycles:.0f}",
+                'サイクル数差異(回)': f"{cycle_diff:.1f}",
+                'サイクル許容範囲(±回)': f"±{tolerance_cycles:.0f}",
+                'サイクル制約': cycle_status,
                 'サイクル数達成率(%)': f"{(actual_cycles/target_cycles*100):.1f}" if target_cycles > 0 else "0.0",
                 '初期SOC(%)': f"{soc_stats.get('initial_soc', 50):.1f}",
                 '最終SOC(%)': f"{soc_stats.get('final_soc', 50):.1f}",
@@ -574,7 +594,7 @@ def initialize_session_state():
         'sim_num_capacities': 2,
         'sim_power_scaling_method': "capacity_ratio",
         'sim_annual_cycle_ratio': 365.0,
-        'sim_annual_cycle_tolerance': 5000,
+        'sim_annual_cycle_tolerance': 10.0,
         'sim_monthly_optimization_trials': 20,
         'sim_individual_capacities': [30000, 60000, 120000, 200000, 300000],
         'sim_individual_powers': [],
@@ -712,17 +732,16 @@ def show_simulation_config_section():
     """シミュレーション設定セクション（SOC引き継ぎ対応）"""
     st.header("2. 年間容量別シミュレーション設定（SOC引き継ぎ対応）")
     
-    # データ確認表示
-    if st.session_state.annual_demand is not None:
+        # 設定値の表示（回数ベース）
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("データ長", f"{len(st.session_state.annual_demand):,}ステップ")
+            st.metric("年間サイクル数", f"{st.session_state.sim_annual_cycle_ratio:.0f}回")
         with col2:
-            st.metric("平均需要", f"{st.session_state.annual_demand.mean():.0f}kW")
+            st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance:.0f}回")
         with col3:
-            st.metric("最大需要", f"{st.session_state.annual_demand.max():.0f}kW")
+            st.metric("初期SOC設定", f"{st.session_state.sim_initial_soc:.0f}%")
         with col4:
-            st.metric("需要幅", f"{st.session_state.annual_demand.max() - st.session_state.annual_demand.min():.0f}kW")
+            st.metric("1日あたり", f"{st.session_state.sim_annual_cycle_ratio/365:.2f}回")
     
     # データ再設定ボタン
     if st.button("📝 データを再設定", key="reset_data"):
@@ -886,11 +905,10 @@ def show_simulation_config_section():
         )
         
     with col2:
-        st.session_state.sim_annual_cycle_tolerance = st.number_input(
-            "年間サイクル許容範囲 (kWh)", 
-            value=st.session_state.sim_annual_cycle_tolerance, 
-            min_value=1000, max_value=50000, step=1000,
-            help="年間サイクル制約の許容範囲",
+        st.session_state.sim_annual_cycle_tolerance = st.slider(
+            "年間サイクル許容範囲 (±回数)", 
+            min_value=1.0, max_value=50.0, value=st.session_state.sim_annual_cycle_tolerance, step=1.0,
+            help="年間サイクル制約の許容範囲（回数ベース）",
             key="annual_cycle_tolerance_input"
         )
     
@@ -1096,20 +1114,23 @@ def display_annual_results():
             with col4:
                 st.metric("1日あたり", f"{st.session_state.sim_annual_cycle_ratio/365:.2f}回")
             
-            # サイクル数の例
-            st.write("**サイクル数の例:**")
-            example_data = []
-            for capacity in capacity_list:
-                target_discharge = capacity * st.session_state.sim_annual_cycle_ratio
-                tolerance_cycles = st.session_state.sim_annual_cycle_tolerance / capacity
-                example_data.append({
-                    '容量(kWh)': f"{capacity:,}",
-                    '目標放電量(MWh)': f"{target_discharge/1000:.1f}",
-                    '目標サイクル数': f"{st.session_state.sim_annual_cycle_ratio:.0f}回",
-                    '許容範囲(±サイクル)': f"±{tolerance_cycles:.1f}回",
-                    '許容範囲(MWh)': f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f}"
-                })
+        # サイクル数の例（回数ベース）
+        st.write("**サイクル数の例（回数ベース）:**")
+        example_data = []
+        for capacity in st.session_state.annual_capacity_list if hasattr(st.session_state, 'annual_capacity_list') else []:
+            target_discharge = capacity * st.session_state.sim_annual_cycle_ratio
+            target_cycles = st.session_state.sim_annual_cycle_ratio
+            tolerance_cycles = st.session_state.sim_annual_cycle_tolerance
             
+            example_data.append({
+                '容量(kWh)': f"{capacity:,}",
+                '目標放電量(MWh)': f"{target_discharge/1000:.1f}",
+                '目標サイクル数': f"{target_cycles:.0f}回",
+                '許容範囲': f"{target_cycles-tolerance_cycles:.0f}〜{target_cycles+tolerance_cycles:.0f}回",
+                '許容範囲幅': f"±{tolerance_cycles:.0f}回"
+            })
+        
+        if example_data:
             example_df = pd.DataFrame(example_data)
             st.dataframe(example_df, use_container_width=True)
     
@@ -2226,8 +2247,8 @@ def show_capacity_recommendation(results, capacity_list):
 
 
 def show_download_section(summary_df, results, annual_comparator):
-    """ダウンロードセクション（SOC引き継ぎ対応）"""
-    st.header("4. 結果ダウンロード（SOC引き継ぎ対応）")
+    """ダウンロードセクション（サイクル許容範囲を回数ベースに変更）"""
+    st.header("4. 結果ダウンロード（SOC引き継ぎ・サイクル回数ベース）")
     
     col1, col2, col3 = st.columns(3)
     
