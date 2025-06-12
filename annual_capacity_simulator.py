@@ -907,9 +907,9 @@ def show_simulation_config_section():
     with col2:
         st.session_state.sim_annual_cycle_tolerance = st.slider(
             "年間サイクル許容範囲 (±回数)", 
-            min_value=1.0, max_value=50.0, value=st.session_state.sim_annual_cycle_tolerance, step=1.0,
+            min_value=1.0, max_value=25.0, value=st.session_state.sim_annual_cycle_tolerance, step=1.0,
             help="年間サイクル制約の許容範囲（回数ベース）",
-            key="annual_cycle_tolerance_input"
+            key="annual_cycle_tolerance_input"S
         )
     
     with col3:
