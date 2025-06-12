@@ -1,4 +1,3 @@
-"""
 年間容量シミュレーション専用アプリケーション（デバッグ版）
 複数容量での年間需要平準化効果比較を実行
 """
@@ -82,6 +81,9 @@ class AnnualBatteryCapacityComparator:
             
             # 線形補間でNaN値を埋める
             mask = ~np.isnan(demand_array)
+            if np.sum(mask) == 0:
+                raise ValueError("すべてのデータがNaN値です")
+            
             indices = np.arange(len(demand_array))
             demand_array[~mask] = np.interp(indices[~mask], indices[mask], demand_array[mask])
         
@@ -178,16 +180,20 @@ class AnnualBatteryCapacityComparator:
                 daily_data, **optimized_params
             )
             
+            # 安全な配列アクセス
+            battery_output = control_result.get('battery_output', np.zeros(len(daily_data)))
+            demand_after_battery = control_result.get('demand_after_battery', daily_data)
+            
             return {
                 'optimized_params': optimized_params,
-                'battery_output': control_result['battery_output'],
-                'soc_profile': control_result['soc_profile'],
-                'demand_after_control': control_result['demand_after_battery'],
-                'control_info': control_result['control_info'],
-                'daily_discharge': -np.sum(control_result['battery_output'][control_result['battery_output'] < 0]),
-                'peak_reduction': np.max(daily_data) - np.max(control_result['demand_after_battery']),
+                'battery_output': battery_output,
+                'soc_profile': control_result.get('soc_profile', np.zeros(len(daily_data))),
+                'demand_after_control': demand_after_battery,
+                'control_info': control_result.get('control_info', {}),
+                'daily_discharge': -np.sum(battery_output[battery_output < 0]) if len(battery_output) > 0 else 0,
+                'peak_reduction': np.max(daily_data) - np.max(demand_after_battery) if len(demand_after_battery) > 0 else 0,
                 'range_improvement': (np.max(daily_data) - np.min(daily_data)) - 
-                                   (np.max(control_result['demand_after_battery']) - np.min(control_result['demand_after_battery']))
+                                   (np.max(demand_after_battery) - np.min(demand_after_battery)) if len(demand_after_battery) > 0 else 0
             }
             
         except Exception as e:
@@ -227,15 +233,18 @@ class AnnualBatteryCapacityComparator:
         # データ検証
         validated_demand = self.validate_annual_data(annual_demand)
         
-        # 日別バッチ作成（月別→日別に変更）
+        # 日別バッチ作成
         daily_batches = self.create_daily_batches(validated_demand)
         st.info(f"年間データを{len(daily_batches)}日のバッチに分割しました")
         
         self.comparison_results = {}
-        self.daily_results = {}  # monthly_results → daily_results
+        self.daily_results = {}
         
         total_operations = len(capacity_list) * len(daily_batches)
         completed_operations = 0
+        
+        # プログレスバーの初期化
+        progress_bar = st.progress(0)
         
         for i, capacity in enumerate(capacity_list):
             try:
@@ -269,7 +278,7 @@ class AnnualBatteryCapacityComparator:
                 
                 # 日別シミュレーション（並列処理オプション）
                 if use_parallel and len(daily_batches) > 10:
-                    # 並列処理（日数が多いので並列化の効果大）
+                    # 並列処理
                     with ThreadPoolExecutor(max_workers=min(8, len(daily_batches))) as executor:
                         future_to_day = {
                             executor.submit(
@@ -289,7 +298,7 @@ class AnnualBatteryCapacityComparator:
                                 # プログレス更新（10日毎に表示）
                                 if completed_operations % 10 == 0:
                                     progress = completed_operations / total_operations
-                                    st.progress(progress)
+                                    progress_bar.progress(progress)
                                 
                             except Exception as e:
                                 st.error(f"{batch['day_name']}の処理でエラー: {e}")
@@ -308,7 +317,7 @@ class AnnualBatteryCapacityComparator:
                             # プログレス更新（10日毎に表示）
                             if completed_operations % 10 == 0:
                                 progress = completed_operations / total_operations
-                                st.progress(progress)
+                                progress_bar.progress(progress)
                                 st.write(f"  - {batch['day_name']} 完了 ({len(daily_results_for_capacity)}/365日)")
                             
                         except Exception as e:
@@ -325,7 +334,7 @@ class AnnualBatteryCapacityComparator:
                 # 月別サマリー作成（表示用）
                 for month in range(1, 13):
                     month_days = [day for day in daily_results_for_capacity.keys() 
-                                if daily_batches[day-1]['month'] == month]
+                                if len(daily_batches) > day-1 and daily_batches[day-1]['month'] == month]
                     
                     if month_days:
                         monthly_discharge = sum(daily_results_for_capacity[day]['daily_discharge'] 
@@ -347,7 +356,7 @@ class AnnualBatteryCapacityComparator:
                 sample_size = min(len(validated_demand), 10000)
                 sample_indices = np.random.choice(len(validated_demand), sample_size, replace=False)
                 sample_original = validated_demand[sample_indices]
-                sample_controlled = annual_demand_after_control[sample_indices]
+                sample_controlled = annual_demand_after_control[sample_indices] if len(annual_demand_after_control) > 0 else sample_original
                 
                 smoothness_metrics = {
                     'smoothness_improvement': np.std(np.diff(sample_original)) - np.std(np.diff(sample_controlled)),
@@ -364,11 +373,11 @@ class AnnualBatteryCapacityComparator:
                     'soc_profile': annual_soc_profile,
                     'demand_after_control': annual_demand_after_control,
                     'smoothness_metrics': smoothness_metrics,
-                    'annual_peak_reduction': np.max(validated_demand) - np.max(annual_demand_after_control),
-                    'annual_range_improvement': (np.max(validated_demand) - np.min(validated_demand)) - 
-                                              (np.max(annual_demand_after_control) - np.min(annual_demand_after_control)),
-                    'annual_discharge': -np.sum(annual_battery_output[annual_battery_output < 0]),
-                    'annual_cycle_constraint_satisfied': abs(-np.sum(annual_battery_output[annual_battery_output < 0]) - annual_cycle_target) <= cycle_tolerance,
+                    'annual_peak_reduction': (np.max(validated_demand) - np.max(annual_demand_after_control)) if len(annual_demand_after_control) > 0 else 0,
+                    'annual_range_improvement': ((np.max(validated_demand) - np.min(validated_demand)) - 
+                                              (np.max(annual_demand_after_control) - np.min(annual_demand_after_control))) if len(annual_demand_after_control) > 0 else 0,
+                    'annual_discharge': -np.sum(annual_battery_output[annual_battery_output < 0]) if len(annual_battery_output) > 0 else 0,
+                    'annual_cycle_constraint_satisfied': abs(-np.sum(annual_battery_output[annual_battery_output < 0]) - annual_cycle_target) <= cycle_tolerance if len(annual_battery_output) > 0 else False,
                     'daily_results': daily_results_for_capacity,  # 日別結果
                     'monthly_summary': monthly_summary,           # 月別サマリー
                     # 季節別統計
@@ -387,6 +396,9 @@ class AnnualBatteryCapacityComparator:
                 import traceback
                 st.text(traceback.format_exc())
                 continue
+        
+        # プログレスバーの終了
+        progress_bar.progress(1.0)
         
         return self.comparison_results
     
@@ -412,15 +424,15 @@ class AnnualBatteryCapacityComparator:
             for month in range(1, 13):
                 end_idx = start_idx + (days_per_month[month-1] * 96)
                 if month in months and month in monthly_summary:
-                    if end_idx <= len(original_demand):
+                    if end_idx <= len(original_demand) and end_idx <= len(controlled_demand):
                         seasonal_original.extend(original_demand[start_idx:end_idx])
                         seasonal_controlled.extend(controlled_demand[start_idx:end_idx])
                         seasonal_discharge += monthly_summary[month]['monthly_discharge']
                 start_idx = end_idx
             
-            if seasonal_original:
+            if seasonal_original and seasonal_controlled:
                 seasonal_stats[season_name] = {
-                    'peak_reduction': np.max(seasonal_original) - np.max(seasonal_controlled),
+                    'peak_reduction': max(0, np.max(seasonal_original) - np.max(seasonal_controlled)),
                     'average_reduction': np.mean(seasonal_original) - np.mean(seasonal_controlled),
                     'total_discharge': seasonal_discharge
                 }
@@ -432,26 +444,6 @@ class AnnualBatteryCapacityComparator:
                 }
         
         return seasonal_stats
-    
-    def _get_month_from_day_simple(self, day_of_year):
-        """年間通算日から月を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            cumulative_days += days
-            if day_of_year < cumulative_days:
-                return month + 1
-        return 12
-    
-    def _get_day_in_month_simple(self, day_of_year):
-        """年間通算日から月内日付を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            if day_of_year < cumulative_days + days:
-                return day_of_year - cumulative_days + 1
-            cumulative_days += days
-        return 31
     
     def get_annual_comparison_summary(self):
         """年間比較結果のサマリー取得"""
@@ -508,31 +500,26 @@ def create_annual_time_series(start_date=None):
 # セッション状態の初期化
 def initialize_session_state():
     """セッション状態の初期化"""
-    if 'annual_demand' not in st.session_state:
-        st.session_state.annual_demand = None
-    if 'annual_comparison_results' not in st.session_state:
-        st.session_state.annual_comparison_results = None
-    if 'annual_capacity_list' not in st.session_state:
-        st.session_state.annual_capacity_list = []
-    if 'annual_comparator' not in st.session_state:
-        st.session_state.annual_comparator = None
-    if 'show_annual_results' not in st.session_state:
-        st.session_state.show_annual_results = False
-    if 'simulation_stage' not in st.session_state:
-        st.session_state.simulation_stage = 'data_upload'
-    # シミュレーション設定用のセッション状態も初期化
-    if 'sim_num_capacities' not in st.session_state:
-        st.session_state.sim_num_capacities = 2
-    if 'sim_power_scaling_method' not in st.session_state:
-        st.session_state.sim_power_scaling_method = "capacity_ratio"
-    if 'sim_annual_cycle_ratio' not in st.session_state:
-        st.session_state.sim_annual_cycle_ratio = 365.0  # 年間365サイクル（毎日1回）
-    if 'sim_annual_cycle_tolerance' not in st.session_state:
-        st.session_state.sim_annual_cycle_tolerance = 5000
-    if 'sim_monthly_optimization_trials' not in st.session_state:
-        st.session_state.sim_monthly_optimization_trials = 20
-    if 'sim_use_parallel' not in st.session_state:
-        st.session_state.sim_use_parallel = True
+    session_vars = {
+        'annual_demand': None,
+        'annual_comparison_results': None,
+        'annual_capacity_list': [],
+        'annual_comparator': None,
+        'show_annual_results': False,
+        'simulation_stage': 'data_upload',
+        'sim_num_capacities': 2,
+        'sim_power_scaling_method': "capacity_ratio",
+        'sim_annual_cycle_ratio': 365.0,
+        'sim_annual_cycle_tolerance': 5000,
+        'sim_monthly_optimization_trials': 20,
+        'sim_use_parallel': True,
+        'sim_individual_capacities': [30000, 60000, 120000, 200000, 300000],
+        'sim_individual_powers': []
+    }
+    
+    for var, default_value in session_vars.items():
+        if var not in st.session_state:
+            st.session_state[var] = default_value
 
 
 def main():
@@ -736,7 +723,7 @@ def show_simulation_config_section():
     cols = st.columns(5)
     
     # セッション状態で個別容量を保存
-    if 'sim_individual_capacities' not in st.session_state:
+    if len(st.session_state.sim_individual_capacities) < 5:
         st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000, 300000]
     
     capacity_list = []
@@ -792,10 +779,10 @@ def show_simulation_config_section():
         st.write("**各容量の最大出力を個別設定:**")
         
         # セッション状態で個別最大出力を保存
-        if 'sim_individual_powers' not in st.session_state:
+        if len(st.session_state.sim_individual_powers) < st.session_state.sim_num_capacities:
             # デフォルト値として容量÷16を設定
             st.session_state.sim_individual_powers = [
-                cap // 16 for cap in st.session_state.sim_individual_capacities
+                cap // 16 for cap in st.session_state.sim_individual_capacities[:st.session_state.sim_num_capacities]
             ]
         
         power_cols = st.columns(5)
@@ -895,7 +882,7 @@ def show_simulation_config_section():
         ※日別最適化により正確な制御が可能
         """)
     
-    # 日別処理の説明（separateなexpanderとして）
+    # 日別処理の説明
     with st.expander("📋 日別処理について", expanded=False):
         st.write("""
         **日別処理の利点:**
@@ -989,6 +976,18 @@ def show_simulation_config_section():
 
 def display_annual_results():
     """年間結果表示"""
+    if not all([
+        st.session_state.annual_comparison_results,
+        st.session_state.annual_capacity_list,
+        st.session_state.annual_demand,
+        st.session_state.annual_comparator
+    ]):
+        st.error("結果データが不完全です。シミュレーションを再実行してください。")
+        if st.button("設定に戻る"):
+            st.session_state.simulation_stage = 'simulation_config'
+            st.rerun()
+        return
+    
     results = st.session_state.annual_comparison_results
     capacity_list = st.session_state.annual_capacity_list
     annual_demand = st.session_state.annual_demand
@@ -1012,7 +1011,7 @@ def display_annual_results():
     if summary_df is not None:
         st.dataframe(summary_df, use_container_width=True)
         
-        # サイクル制約の詳細説明（別のexpanderとして）
+        # サイクル制約の詳細説明
         st.subheader("サイクル制約の詳細説明")
         with st.expander("📋 サイクル制約について", expanded=False):
             st.write("""
@@ -1066,10 +1065,6 @@ def display_annual_results():
                 })
             
             example_df = pd.DataFrame(example_data)
-            st.dataframe(example_df, use_container_width=True)1000:.1f}"
-                })
-            
-            example_df = pd.DataFrame(example_data)
             st.dataframe(example_df, use_container_width=True)
     
     # タブで結果を整理
@@ -1089,9 +1084,7 @@ def display_annual_results():
     
     # ダウンロードセクション
     show_download_section(summary_df, results, annual_comparator)
-
-
-def show_annual_demand_comparison(results, capacity_list, annual_demand):
+    def show_annual_demand_comparison(results, capacity_list, annual_demand):
     """年間需要比較タブの内容"""
     st.subheader("年間需要カーブ比較")
     
@@ -1127,125 +1120,125 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         )
     
     # データ期間とサンプリング設定
-    if graph_period == "1週間":
-        # 指定月の第1週
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        start_idx = sum(days_per_month[:start_month-1]) * 96
-        end_idx = start_idx + (7 * 96)  # 1週間分
-        period_title = f"{start_month}月第1週"
-    elif graph_period == "1ヶ月":
-        # 指定月全体
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        start_idx = sum(days_per_month[:start_month-1]) * 96
-        end_idx = start_idx + (days_per_month[start_month-1] * 96)
-        period_title = f"{start_month}月"
-    elif graph_period == "3ヶ月":
-        # 指定月から3ヶ月
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        start_idx = sum(days_per_month[:start_month-1]) * 96
-        end_month = min(start_month + 2, 12)
-        end_idx = sum(days_per_month[:end_month]) * 96
-        period_title = f"{start_month}月〜{end_month}月"
-    else:
-        # 全年間（サンプル表示）
-        start_idx = 0
-        end_idx = len(annual_demand)
-        # サンプリング（表示負荷軽減のため）
-        sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
-        sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
-        period_title = "全年間（サンプル表示）"
-    
-    # データ抽出
-    if graph_period != "全年間（サンプル）":
-        # 指定期間のデータを抽出
-        end_idx = min(end_idx, len(annual_demand))
-        period_demand = annual_demand[start_idx:end_idx]
-        
-        if selected_capacity_graph in results:
-            period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
-        else:
-            period_controlled = period_demand  # フォールバック
-        
-        # 時系列作成
-        time_series = create_annual_time_series()
-        period_times = time_series[start_idx:end_idx]
-    else:
-        # 全年間サンプル表示
-        period_demand = annual_demand[sample_indices]
-        
-        if selected_capacity_graph in results:
-            period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
-        else:
-            period_controlled = period_demand
-        
-        time_series = create_annual_time_series()
-        period_times = [time_series[i] for i in sample_indices]
-    
-    # 需要比較グラフ
-    fig_demand = go.Figure()
-    
-    # 元需要予測
-    fig_demand.add_trace(go.Scatter(
-        x=period_times,
-        y=period_demand,
-        name="元需要予測",
-        line=dict(color="lightblue", width=2),
-        opacity=0.8
-    ))
-    
-    # 電池制御後需要
-    fig_demand.add_trace(go.Scatter(
-        x=period_times,
-        y=period_controlled,
-        name=f"電池制御後（{selected_capacity_graph:,}kWh）",
-        line=dict(color="red", width=2)
-    ))
-    
-    fig_demand.update_layout(
-        title=f"需要カーブ比較 - {period_title}",
-        xaxis_title="日時",
-        yaxis_title="需要 (kW)",
-        height=500,
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-        hovermode='x unified'
-    )
-    
-    st.plotly_chart(fig_demand, use_container_width=True)
-    
-    # 効果統計表示
-    if selected_capacity_graph in results:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            peak_reduction = np.max(period_demand) - np.max(period_controlled)
-            st.metric("ピーク削減", f"{peak_reduction:.1f} kW")
-        
-        with col2:
-            avg_reduction = np.mean(period_demand) - np.mean(period_controlled)
-            st.metric("平均削減", f"{avg_reduction:.1f} kW")
-        
-        with col3:
-            range_original = np.max(period_demand) - np.min(period_demand)
-            range_controlled = np.max(period_controlled) - np.min(period_controlled)
-            range_improvement = range_original - range_controlled
-            st.metric("需要幅改善", f"{range_improvement:.1f} kW")
-        
-        with col4:
-            smoothness_original = np.std(np.diff(period_demand))
-            smoothness_controlled = np.std(np.diff(period_controlled))
-            smoothness_improvement = smoothness_original - smoothness_controlled
-            st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
-    
-    # 全容量比較グラフ（年間データのサンプル表示）
-    st.subheader("全容量比較（年間サンプル）")
-    
-    # データサンプリング（表示用）
-    sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
-    sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
-    
-    fig_annual = go.Figure()
-    
     try:
+        if graph_period == "1週間":
+            # 指定月の第1週
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_idx = start_idx + (7 * 96)  # 1週間分
+            period_title = f"{start_month}月第1週"
+        elif graph_period == "1ヶ月":
+            # 指定月全体
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_idx = start_idx + (days_per_month[start_month-1] * 96)
+            period_title = f"{start_month}月"
+        elif graph_period == "3ヶ月":
+            # 指定月から3ヶ月
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_month = min(start_month + 2, 12)
+            end_idx = sum(days_per_month[:end_month]) * 96
+            period_title = f"{start_month}月〜{end_month}月"
+        else:
+            # 全年間（サンプル表示）
+            start_idx = 0
+            end_idx = len(annual_demand)
+            # サンプリング（表示負荷軽減のため）
+            sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
+            sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
+            period_title = "全年間（サンプル表示）"
+        
+        # データ抽出
+        if graph_period != "全年間（サンプル）":
+            # 指定期間のデータを抽出
+            end_idx = min(end_idx, len(annual_demand))
+            period_demand = annual_demand[start_idx:end_idx]
+            
+            if selected_capacity_graph in results:
+                period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
+            else:
+                period_controlled = period_demand  # フォールバック
+            
+            # 時系列作成
+            time_series = create_annual_time_series()
+            period_times = time_series[start_idx:end_idx]
+        else:
+            # 全年間サンプル表示
+            period_demand = annual_demand[sample_indices]
+            
+            if selected_capacity_graph in results:
+                period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
+            else:
+                period_controlled = period_demand
+            
+            time_series = create_annual_time_series()
+            period_times = [time_series[i] for i in sample_indices]
+        
+        # 需要比較グラフ
+        fig_demand = go.Figure()
+        
+        # 元需要予測
+        fig_demand.add_trace(go.Scatter(
+            x=period_times,
+            y=period_demand,
+            name="元需要予測",
+            line=dict(color="lightblue", width=2),
+            opacity=0.8
+        ))
+        
+        # 電池制御後需要
+        fig_demand.add_trace(go.Scatter(
+            x=period_times,
+            y=period_controlled,
+            name=f"電池制御後（{selected_capacity_graph:,}kWh）",
+            line=dict(color="red", width=2)
+        ))
+        
+        fig_demand.update_layout(
+            title=f"需要カーブ比較 - {period_title}",
+            xaxis_title="日時",
+            yaxis_title="需要 (kW)",
+            height=500,
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig_demand, use_container_width=True)
+        
+        # 効果統計表示
+        if selected_capacity_graph in results:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                peak_reduction = np.max(period_demand) - np.max(period_controlled)
+                st.metric("ピーク削減", f"{peak_reduction:.1f} kW")
+            
+            with col2:
+                avg_reduction = np.mean(period_demand) - np.mean(period_controlled)
+                st.metric("平均削減", f"{avg_reduction:.1f} kW")
+            
+            with col3:
+                range_original = np.max(period_demand) - np.min(period_demand)
+                range_controlled = np.max(period_controlled) - np.min(period_controlled)
+                range_improvement = range_original - range_controlled
+                st.metric("需要幅改善", f"{range_improvement:.1f} kW")
+            
+            with col4:
+                smoothness_original = np.std(np.diff(period_demand))
+                smoothness_controlled = np.std(np.diff(period_controlled))
+                smoothness_improvement = smoothness_original - smoothness_controlled
+                st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
+        
+        # 全容量比較グラフ（年間データのサンプル表示）
+        st.subheader("全容量比較（年間サンプル）")
+        
+        # データサンプリング（表示用）
+        sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
+        sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
+        
+        fig_annual = go.Figure()
+        
         # サンプル時系列作成
         time_series = create_annual_time_series()
         sample_times = [time_series[i] for i in sample_indices]
@@ -1281,52 +1274,58 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         
     except Exception as e:
         st.error(f"年間グラフ作成エラー: {e}")
+        import traceback
+        st.text(traceback.format_exc())
     
     # バッテリー出力グラフ
     st.subheader("バッテリー出力パターン")
     
-    if selected_capacity_graph in results:
-        # 同じ期間のバッテリー出力を表示
-        if graph_period != "全年間（サンプル）":
-            battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
-            battery_times = period_times
-        else:
-            battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
-            battery_times = period_times
+    try:
+        if selected_capacity_graph in results:
+            # 同じ期間のバッテリー出力を表示
+            if graph_period != "全年間（サンプル）":
+                battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
+                battery_times = period_times
+            else:
+                battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
+                battery_times = period_times
+            
+            fig_battery = go.Figure()
+            
+            # 充電（正の値）と放電（負の値）を色分け
+            charging = np.where(battery_output >= 0, battery_output, 0)
+            discharging = np.where(battery_output < 0, battery_output, 0)
+            
+            fig_battery.add_trace(go.Scatter(
+                x=battery_times,
+                y=charging,
+                name="充電",
+                fill='tozeroy',
+                line=dict(color="blue"),
+                opacity=0.7
+            ))
+            
+            fig_battery.add_trace(go.Scatter(
+                x=battery_times,
+                y=discharging,
+                name="放電",
+                fill='tozeroy',
+                line=dict(color="orange"),
+                opacity=0.7
+            ))
+            
+            fig_battery.update_layout(
+                title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
+                xaxis_title="日時",
+                yaxis_title="出力 (kW)",
+                height=400,
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
+            
+            st.plotly_chart(fig_battery, use_container_width=True)
         
-        fig_battery = go.Figure()
-        
-        # 充電（正の値）と放電（負の値）を色分け
-        charging = np.where(battery_output >= 0, battery_output, 0)
-        discharging = np.where(battery_output < 0, battery_output, 0)
-        
-        fig_battery.add_trace(go.Scatter(
-            x=battery_times,
-            y=charging,
-            name="充電",
-            fill='tozeroy',
-            line=dict(color="blue"),
-            opacity=0.7
-        ))
-        
-        fig_battery.add_trace(go.Scatter(
-            x=battery_times,
-            y=discharging,
-            name="放電",
-            fill='tozeroy',
-            line=dict(color="orange"),
-            opacity=0.7
-        ))
-        
-        fig_battery.update_layout(
-            title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
-            xaxis_title="日時",
-            yaxis_title="出力 (kW)",
-            height=400,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-        )
-        
-        st.plotly_chart(fig_battery, use_container_width=True)
+    except Exception as e:
+        st.error(f"バッテリー出力グラフ作成エラー: {e}")
     
     # 年間統計
     col1, col2, col3, col4 = st.columns(4)
@@ -1547,11 +1546,11 @@ def show_monthly_detail_analysis(results, capacity_list, annual_comparator):
             month_daily_data = []
             for day, result in daily_results.items():
                 # 日から月を計算（簡易版）
-                day_month = annual_comparator._get_month_from_day_simple(day - 1)
+                day_month = annual_comparator._get_month_from_day(day - 1)
                 if day_month == selected_month:
                     month_daily_data.append({
                         '日': day,
-                        '日付': f"{selected_month}月{annual_comparator._get_day_in_month_simple(day - 1)}日",
+                        '日付': f"{selected_month}月{annual_comparator._get_day_in_month(day - 1)}日",
                         'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
                         '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
                         '需要幅改善(kW)': f"{result['range_improvement']:.1f}"
@@ -1586,14 +1585,17 @@ def show_capacity_recommendation(results, capacity_list):
         for capacity, result in results.items():
             # 各指標のスコア計算
             peak_score = result.get('annual_peak_reduction', 0) * 0.3
-            efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25
+            efficiency_score = (result.get('annual_peak_reduction', 0) / (capacity / 1000)) * 0.25 if capacity > 0 else 0
             cycle_score = 100 if result.get('annual_cycle_constraint_satisfied', False) else 0
-            seasonal_balance_score = np.std([
+            
+            # 季節バランススコア（標準偏差が小さい方が良い）
+            seasonal_values = [
                 result['seasonal_stats']['spring']['peak_reduction'],
                 result['seasonal_stats']['summer']['peak_reduction'],
                 result['seasonal_stats']['autumn']['peak_reduction'],
                 result['seasonal_stats']['winter']['peak_reduction']
-            ]) * (-0.2)  # 標準偏差が小さい方が良い
+            ]
+            seasonal_balance_score = -np.std(seasonal_values) * 0.2
             
             total_score = peak_score + efficiency_score + cycle_score * 0.2 + seasonal_balance_score
             
@@ -1652,8 +1654,8 @@ def show_capacity_recommendation(results, capacity_list):
         with col3:
             # 最高効率容量
             best_efficiency_capacity = max(results.keys(), 
-                                         key=lambda x: results[x].get('annual_peak_reduction', 0) / (x / 1000))
-            efficiency_value = results[best_efficiency_capacity].get('annual_peak_reduction', 0) / (best_efficiency_capacity / 1000)
+                                         key=lambda x: results[x].get('annual_peak_reduction', 0) / (x / 1000) if x > 0 else 0)
+            efficiency_value = results[best_efficiency_capacity].get('annual_peak_reduction', 0) / (best_efficiency_capacity / 1000) if best_efficiency_capacity > 0 else 0
             
             st.info(f"""
             **⚡ 最高効率**
@@ -1669,6 +1671,8 @@ def show_capacity_recommendation(results, capacity_list):
     
     except Exception as e:
         st.error(f"推奨容量判定エラー: {e}")
+        import traceback
+        st.text(traceback.format_exc())
 
 
 def show_download_section(summary_df, results, annual_comparator):
@@ -1713,8 +1717,8 @@ def show_download_section(summary_df, results, annual_comparator):
                     # 日別詳細（サンプル：各月の最初の5日）
                     if 'daily_results' in result:
                         for day, daily_result in list(result['daily_results'].items())[:50]:  # 最初の50日
-                            month = annual_comparator._get_month_from_day_simple(day - 1)
-                            day_in_month = annual_comparator._get_day_in_month_simple(day - 1)
+                            month = annual_comparator._get_month_from_day(day - 1)
+                            day_in_month = annual_comparator._get_day_in_month(day - 1)
                             detail_data.append({
                                 '容量(kWh)': capacity,
                                 '分析レベル': '日別',
@@ -1771,4 +1775,4 @@ def show_download_section(summary_df, results, annual_comparator):
 
 
 if __name__ == "__main__":
-    main()
+    main()"""
