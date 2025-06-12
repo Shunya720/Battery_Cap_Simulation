@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 
 # コアロジック読み込み
 from battery_core_logic import (
-    BatteryControlEngine, ERROR_DATA, create_time_series,
+    BatteryControlEngine, create_time_series,
     OPTIMIZATION_AVAILABLE
 )
 
@@ -665,12 +665,6 @@ def main():
                         use_container_width=True
                     )
         
-        # エラーデータ表示（デバッグ用）
-        if ERROR_DATA:
-            st.header("⚠️ エラーログ")
-            with st.expander("🔍 エラー詳細", expanded=False):
-                for i, error in enumerate(ERROR_DATA[-10:]):  # 最新10件
-                    st.text(f"{i+1}. {error}")
     
     else:
         st.warning("⚠️ 需要予測データをアップロードしてください")
