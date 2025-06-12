@@ -713,206 +713,207 @@ def show_simulation_config_section():
         st.session_state.annual_demand = None
         st.rerun()
     
-    with st.expander("年間シミュレーション設定", expanded=True):
-        
-        # 容量設定（個別入力のみ）
-        st.subheader("比較容量設定")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.session_state.sim_num_capacities = st.selectbox(
-                "比較容量数", 
-                [2, 3, 4, 5], 
-                index=[2, 3, 4, 5].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [2, 3, 4, 5] else 0,
-                help="比較したいバッテリー容量の数を選択してください",
-                key="num_capacities_select"
+    # 年間シミュレーション設定セクション
+    st.subheader("年間シミュレーション設定")
+    
+    # 容量設定（個別入力のみ）
+    st.subheader("比較容量設定")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.sim_num_capacities = st.selectbox(
+            "比較容量数", 
+            [2, 3, 4, 5], 
+            index=[2, 3, 4, 5].index(st.session_state.sim_num_capacities) if st.session_state.sim_num_capacities in [2, 3, 4, 5] else 0,
+            help="比較したいバッテリー容量の数を選択してください",
+            key="num_capacities_select"
+        )
+    
+    with col2:
+        st.info("各容量を個別に入力してください")
+    
+    # 容量入力欄
+    cols = st.columns(5)
+    
+    # セッション状態で個別容量を保存
+    if 'sim_individual_capacities' not in st.session_state:
+        st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000, 300000]
+    
+    capacity_list = []
+    
+    for i in range(st.session_state.sim_num_capacities):
+        with cols[i]:
+            st.session_state.sim_individual_capacities[i] = st.number_input(
+                f"容量{i+1} (kWh)", 
+                value=st.session_state.sim_individual_capacities[i],
+                min_value=10000, max_value=500000, step=10000,
+                key=f"manual_capacity_{i}_input"
             )
+            capacity_list.append(st.session_state.sim_individual_capacities[i])
+    
+    # 未使用の列は空白
+    for i in range(st.session_state.sim_num_capacities, 5):
+        with cols[i]:
+            st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True, key=f"unused_capacity_{i}")
+    
+    # 重複チェック
+    if len(set(capacity_list)) != len(capacity_list):
+        st.warning("⚠️ 重複する容量があります。異なる容量を設定してください。")
+    else:
+        st.success(f"✅ 選択容量: {', '.join([f'{cap:,}kWh' for cap in capacity_list])}")
+    
+    # 最大出力設定
+    st.subheader("最大出力設定")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.sim_power_scaling_method = st.selectbox(
+            "最大出力決定方法",
+            ["capacity_ratio", "custom", "individual"],
+            index=["capacity_ratio", "custom", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "custom", "individual"] else 0,
+            format_func=lambda x: {
+                "capacity_ratio": "容量比例（容量÷16）",
+                "custom": "カスタム比率（容量÷20）",
+                "individual": "個別入力"
+            }[x],
+            key="power_scaling_select"
+        )
+    
+    with col2:
+        if st.session_state.sim_power_scaling_method == "capacity_ratio":
+            st.info("各容量を16で割った値を最大出力とします")
+        elif st.session_state.sim_power_scaling_method == "custom":
+            st.info("各容量を20で割った値を最大出力とします")
+        elif st.session_state.sim_power_scaling_method == "individual":
+            st.info("各容量に対して個別に最大出力を設定します")
+    
+    # 個別入力の場合の設定欄
+    if st.session_state.sim_power_scaling_method == "individual":
+        st.write("**各容量の最大出力を個別設定:**")
         
-        with col2:
-            st.info("各容量を個別に入力してください")
+        # セッション状態で個別最大出力を保存
+        if 'sim_individual_powers' not in st.session_state:
+            # デフォルト値として容量÷16を設定
+            st.session_state.sim_individual_powers = [
+                cap // 16 for cap in st.session_state.sim_individual_capacities
+            ]
         
-        # 容量入力欄
-        cols = st.columns(5)
-        
-        # セッション状態で個別容量を保存
-        if 'sim_individual_capacities' not in st.session_state:
-            st.session_state.sim_individual_capacities = [30000, 60000, 120000, 200000, 300000]
-        
-        capacity_list = []
+        power_cols = st.columns(5)
         
         for i in range(st.session_state.sim_num_capacities):
-            with cols[i]:
-                st.session_state.sim_individual_capacities[i] = st.number_input(
-                    f"容量{i+1} (kWh)", 
-                    value=st.session_state.sim_individual_capacities[i],
-                    min_value=10000, max_value=500000, step=10000,
-                    key=f"manual_capacity_{i}_input"
+            with power_cols[i]:
+                # 対応する容量を取得
+                capacity = st.session_state.sim_individual_capacities[i]
+                
+                # デフォルト値を容量÷16に設定（まだ設定されていない場合）
+                if i >= len(st.session_state.sim_individual_powers):
+                    st.session_state.sim_individual_powers.append(capacity // 16)
+                
+                st.session_state.sim_individual_powers[i] = st.number_input(
+                    f"出力{i+1} (kW)\n容量: {capacity:,}kWh",
+                    value=st.session_state.sim_individual_powers[i],
+                    min_value=100, max_value=50000, step=100,
+                    key=f"individual_power_{i}_input",
+                    help=f"容量{capacity:,}kWh に対する最大出力"
                 )
-                capacity_list.append(st.session_state.sim_individual_capacities[i])
         
         # 未使用の列は空白
         for i in range(st.session_state.sim_num_capacities, 5):
-            with cols[i]:
-                st.text_input(f"容量{i+1} (kWh)", value="未使用", disabled=True, key=f"unused_capacity_{i}")
+            with power_cols[i]:
+                st.text_input(f"出力{i+1} (kW)", value="未使用", disabled=True, key=f"unused_power_{i}")
         
-        # 重複チェック
-        if len(set(capacity_list)) != len(capacity_list):
-            st.warning("⚠️ 重複する容量があります。異なる容量を設定してください。")
-        else:
-            st.success(f"✅ 選択容量: {', '.join([f'{cap:,}kWh' for cap in capacity_list])}")
+        # 出力/容量比の表示
+        st.write("**出力/容量比 確認:**")
+        ratio_data = []
+        for i in range(st.session_state.sim_num_capacities):
+            capacity = st.session_state.sim_individual_capacities[i]
+            power = st.session_state.sim_individual_powers[i]
+            ratio = capacity / power if power > 0 else 0
+            ratio_data.append({
+                f'容量{i+1}': f"{capacity:,}kWh",
+                f'出力{i+1}': f"{power:,}kW",
+                f'比率{i+1}': f"1:{ratio:.1f}" if ratio > 0 else "設定エラー"
+            })
         
-        # 最大出力設定
-        st.subheader("最大出力設定")
+        ratio_df = pd.DataFrame(ratio_data)
+        st.dataframe(ratio_df, use_container_width=True)
+    
+    # 年間最適化設定
+    st.subheader("年間最適化設定")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.session_state.sim_annual_cycle_ratio = st.slider(
+            "年間サイクル数", 
+            min_value=300.0, max_value=400.0, value=st.session_state.sim_annual_cycle_ratio, step=5.0,
+            help="年間のバッテリーサイクル数（350-365回推奨）",
+            key="annual_cycle_ratio_slider"
+        )
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.session_state.sim_power_scaling_method = st.selectbox(
-                "最大出力決定方法",
-                ["capacity_ratio", "custom", "individual"],
-                index=["capacity_ratio", "custom", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "custom", "individual"] else 0,
-                format_func=lambda x: {
-                    "capacity_ratio": "容量比例（容量÷16）",
-                    "custom": "カスタム比率（容量÷20）",
-                    "individual": "個別入力"
-                }[x],
-                key="power_scaling_select"
-            )
+    with col2:
+        st.session_state.sim_annual_cycle_tolerance = st.number_input(
+            "年間サイクル許容範囲 (kWh)", 
+            value=st.session_state.sim_annual_cycle_tolerance, 
+            min_value=1000, max_value=50000, step=1000,
+            help="年間サイクル制約の許容範囲",
+            key="annual_cycle_tolerance_input"
+        )
+    
+    with col3:
+        st.session_state.sim_monthly_optimization_trials = st.slider(
+            "日別最適化試行回数",
+            min_value=5, max_value=30, value=min(st.session_state.sim_monthly_optimization_trials, 15), step=2,
+            help="各日の最適化試行回数（少なくすると高速化、日別処理のため月別より少なめ推奨）",
+            key="daily_optimization_trials_slider"
+        )
+    
+    # 処理方式設定
+    st.subheader("処理設定")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.session_state.sim_use_parallel = st.checkbox(
+            "並列処理を使用", 
+            value=st.session_state.sim_use_parallel,
+            help="日別処理を並列実行（高速化、但しメモリ使用量増加）",
+            key="use_parallel_checkbox"
+        )
+    
+    with col2:
+        # 予想計算時間（日別処理）
+        estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * (0.1 if st.session_state.sim_use_parallel else 0.3)
+        st.info(f"""
+        **予想処理時間（日別処理）:**
+        - 容量数: {len(capacity_list)}
+        - 日数: 365日
+        - 並列処理: {'有効' if st.session_state.sim_use_parallel else '無効'}
         
-        with col2:
-            if st.session_state.sim_power_scaling_method == "capacity_ratio":
-                st.info("各容量を16で割った値を最大出力とします")
-            elif st.session_state.sim_power_scaling_method == "custom":
-                st.info("各容量を20で割った値を最大出力とします")
-            elif st.session_state.sim_power_scaling_method == "individual":
-                st.info("各容量に対して個別に最大出力を設定します")
+        約 {estimated_time/60:.1f}分 〜 {estimated_time/20:.1f}分
         
-        # 個別入力の場合の設定欄
-        if st.session_state.sim_power_scaling_method == "individual":
-            st.write("**各容量の最大出力を個別設定:**")
-            
-            # セッション状態で個別最大出力を保存
-            if 'sim_individual_powers' not in st.session_state:
-                # デフォルト値として容量÷16を設定
-                st.session_state.sim_individual_powers = [
-                    cap // 16 for cap in st.session_state.sim_individual_capacities
-                ]
-            
-            power_cols = st.columns(5)
-            
-            for i in range(st.session_state.sim_num_capacities):
-                with power_cols[i]:
-                    # 対応する容量を取得
-                    capacity = st.session_state.sim_individual_capacities[i]
-                    
-                    # デフォルト値を容量÷16に設定（まだ設定されていない場合）
-                    if i >= len(st.session_state.sim_individual_powers):
-                        st.session_state.sim_individual_powers.append(capacity // 16)
-                    
-                    st.session_state.sim_individual_powers[i] = st.number_input(
-                        f"出力{i+1} (kW)\n容量: {capacity:,}kWh",
-                        value=st.session_state.sim_individual_powers[i],
-                        min_value=100, max_value=50000, step=100,
-                        key=f"individual_power_{i}_input",
-                        help=f"容量{capacity:,}kWh に対する最大出力"
-                    )
-            
-            # 未使用の列は空白
-            for i in range(st.session_state.sim_num_capacities, 5):
-                with power_cols[i]:
-                    st.text_input(f"出力{i+1} (kW)", value="未使用", disabled=True, key=f"unused_power_{i}")
-            
-            # 出力/容量比の表示
-            st.write("**出力/容量比 確認:**")
-            ratio_data = []
-            for i in range(st.session_state.sim_num_capacities):
-                capacity = st.session_state.sim_individual_capacities[i]
-                power = st.session_state.sim_individual_powers[i]
-                ratio = capacity / power if power > 0 else 0
-                ratio_data.append({
-                    f'容量{i+1}': f"{capacity:,}kWh",
-                    f'出力{i+1}': f"{power:,}kW",
-                    f'比率{i+1}': f"1:{ratio:.1f}" if ratio > 0 else "設定エラー"
-                })
-            
-            ratio_df = pd.DataFrame(ratio_data)
-            st.dataframe(ratio_df, use_container_width=True)
+        ※日別最適化により正確な制御が可能
+        """)
+    
+    # 日別処理の説明（separateなexpanderとして）
+    with st.expander("📋 日別処理について", expanded=False):
+        st.write("""
+        **日別処理の利点:**
+        - `battery_core_logic`の設計仕様（1日=96ステップ）に正確に準拠
+        - 各日の需要パターンに最適化されたバッテリー制御
+        - より現実的な運用シミュレーション
         
-        # 年間最適化設定
-        st.subheader("年間最適化設定")
+        **処理内容:**
+        - 年間365日を個別に最適化
+        - 各日で独立したパラメータ最適化
+        - 日別サイクル目標: 年間目標 ÷ 365
+        - 結果を月別・季節別に集計して表示
         
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.session_state.sim_annual_cycle_ratio = st.slider(
-                "年間サイクル数", 
-                min_value=300.0, max_value=400.0, value=st.session_state.sim_annual_cycle_ratio, step=5.0,
-                help="年間のバッテリーサイクル数（350-365回推奨）",
-                key="annual_cycle_ratio_slider"
-            )
-            
-        with col2:
-            st.session_state.sim_annual_cycle_tolerance = st.number_input(
-                "年間サイクル許容範囲 (kWh)", 
-                value=st.session_state.sim_annual_cycle_tolerance, 
-                min_value=1000, max_value=50000, step=1000,
-                help="年間サイクル制約の許容範囲",
-                key="annual_cycle_tolerance_input"
-            )
-        
-        with col3:
-            st.session_state.sim_monthly_optimization_trials = st.slider(
-                "日別最適化試行回数",
-                min_value=5, max_value=30, value=min(st.session_state.sim_monthly_optimization_trials, 15), step=2,
-                help="各日の最適化試行回数（少なくすると高速化、日別処理のため月別より少なめ推奨）",
-                key="daily_optimization_trials_slider"
-            )
-        
-        # 処理方式設定
-        st.subheader("処理設定")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.session_state.sim_use_parallel = st.checkbox(
-                "並列処理を使用", 
-                value=st.session_state.sim_use_parallel,
-                help="日別処理を並列実行（高速化、但しメモリ使用量増加）",
-                key="use_parallel_checkbox"
-            )
-        
-        with col2:
-            # 予想計算時間（日別処理）
-            estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * (0.1 if st.session_state.sim_use_parallel else 0.3)
-            st.info(f"""
-            **予想処理時間（日別処理）:**
-            - 容量数: {len(capacity_list)}
-            - 日数: 365日
-            - 並列処理: {'有効' if st.session_state.sim_use_parallel else '無効'}
-            
-            約 {estimated_time/60:.1f}分 〜 {estimated_time/20:.1f}分
-            
-            ※日別最適化により正確な制御が可能
-            """)
-        
-        # 日別処理の説明
-        with st.expander("📋 日別処理について", expanded=False):
-            st.write("""
-            **日別処理の利点:**
-            - `battery_core_logic`の設計仕様（1日=96ステップ）に正確に準拠
-            - 各日の需要パターンに最適化されたバッテリー制御
-            - より現実的な運用シミュレーション
-            
-            **処理内容:**
-            - 年間365日を個別に最適化
-            - 各日で独立したパラメータ最適化
-            - 日別サイクル目標: 年間目標 ÷ 365
-            - 結果を月別・季節別に集計して表示
-            
-            **注意事項:**
-            - 月別処理より計算時間が増加
-            - より正確だが、処理負荷が高い
-            - 並列処理推奨（特に複数容量比較時）
-            """)
+        **注意事項:**
+        - 月別処理より計算時間が増加
+        - より正確だが、処理負荷が高い
+        - 並列処理推奨（特に複数容量比較時）
+        """)
     
     # 年間シミュレーション実行ボタン
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -1011,7 +1012,8 @@ def display_annual_results():
     if summary_df is not None:
         st.dataframe(summary_df, use_container_width=True)
         
-        # サイクル制約の詳細説明
+        # サイクル制約の詳細説明（別のexpanderとして）
+        st.subheader("サイクル制約の詳細説明")
         with st.expander("📋 サイクル制約について", expanded=False):
             st.write("""
             **サイクル制約とは:**
@@ -1061,6 +1063,10 @@ def display_annual_results():
                     '目標サイクル数': f"{st.session_state.sim_annual_cycle_ratio:.0f}回",
                     '許容範囲(±サイクル)': f"±{tolerance_cycles:.1f}回",
                     '許容範囲(MWh)': f"±{st.session_state.sim_annual_cycle_tolerance/1000:.1f}"
+                })
+            
+            example_df = pd.DataFrame(example_data)
+            st.dataframe(example_df, use_container_width=True)1000:.1f}"
                 })
             
             example_df = pd.DataFrame(example_data)
