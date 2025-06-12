@@ -281,8 +281,6 @@ class AnnualBatteryCapacityComparator:
                 # 最大出力設定
                 if power_scaling_method == 'capacity_ratio':
                     max_power = capacity / 16
-                elif power_scaling_method == 'custom':
-                    max_power = capacity / 20
                 elif power_scaling_method == 'individual':
                     # 個別入力から対応する出力を取得
                     if hasattr(st.session_state, 'sim_individual_powers') and i < len(st.session_state.sim_individual_powers):
