@@ -138,26 +138,23 @@ class AnnualBatteryCapacityComparator:
             cumulative_days += days
         return 31
     
-    def run_daily_simulation_with_soc(self, daily_data, capacity, max_power, 
-                                    daily_cycle_target, cycle_tolerance, optimization_trials,
-                                    initial_soc=50.0):
-        """SOC引き継ぎ対応日別シミュレーション実行（1日=96ステップ）"""
-        try:
-            if not CORE_LOGIC_AVAILABLE:
-                return self._create_dummy_daily_result_with_soc(daily_data, capacity, max_power, 
-                                                              daily_cycle_target, initial_soc)
-            
-            # バッテリーエンジンの初期化（SOC指定対応）
-            engine = BatteryControlEngine(
-                battery_capacity=capacity,
-                max_power=max_power
-            )
-            
-            # SOC初期値を設定（エンジンがサポートしている場合）
-            if hasattr(engine, 'set_initial_soc'):
-                engine.set_initial_soc(initial_soc)
-            elif hasattr(engine, 'soc_manager') and hasattr(engine.soc_manager, 'current_soc'):
-                engine.soc_manager.current_soc = initial_soc
+# 年間シミュレーションアプリ側（修正不要、既存コードがそのまま動作）
+def run_daily_simulation_with_soc(self, daily_data, capacity, max_power, 
+                                daily_cycle_target, cycle_tolerance, optimization_trials,
+                                initial_soc=50.0):
+    
+    # バッテリーエンジンの初期化（動的SOC対応）
+    engine = BatteryControlEngine(
+        battery_capacity=capacity,
+        max_power=max_power,
+        initial_soc=initial_soc  # ← 動的SOCを渡す
+    )
+    
+    # 追加でSOC設定（二重設定だが安全性のため）
+    if hasattr(engine, 'set_initial_soc'):
+        engine.set_initial_soc(initial_soc)
+    elif hasattr(engine, 'soc_manager') and hasattr(engine.soc_manager, 'current_soc'):
+        engine.soc_manager.current_soc = initial_soc
             
             # 日別最適化実行
             if OPTIMIZATION_AVAILABLE:
