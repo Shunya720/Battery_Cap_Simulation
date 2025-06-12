@@ -829,12 +829,7 @@ def debug_test():
 
 
 if __name__ == "__main__":
-    # デバッグモードの表示
-    if st.sidebar.checkbox("デバッグモード有効", value=False):
-        debug_test()
-    
-    else:
-        st.warning("需要予測データをアップロードしてください")
-        st.info("CSVファイルには時刻列と需要列（96ステップ、15分間隔）が必要です")
+    st.warning("需要予測データをアップロードしてください")
+    st.info("CSVファイルには時刻列と需要列（96ステップ、15分間隔）が必要です")
     
     main()
