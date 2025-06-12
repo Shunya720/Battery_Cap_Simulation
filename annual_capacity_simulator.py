@@ -977,12 +977,13 @@ def show_simulation_config_section():
 
 def display_annual_results():
     """年間結果表示"""
-    if not all([
-        st.session_state.annual_comparison_results,
-        st.session_state.annual_capacity_list,
-        st.session_state.annual_demand,
-        st.session_state.annual_comparator
-    ]):
+    # 各項目を個別にチェック
+    if (not st.session_state.annual_comparison_results or
+        not st.session_state.annual_capacity_list or
+        st.session_state.annual_demand is None or
+        len(st.session_state.annual_demand) == 0 or
+        not st.session_state.annual_comparator):
+        
         st.error("結果データが不完全です。シミュレーションを再実行してください。")
         if st.button("設定に戻る"):
             st.session_state.simulation_stage = 'simulation_config'
