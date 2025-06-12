@@ -571,7 +571,7 @@ def show_data_upload_section():
     help="365日×96ステップ/日=35,040ステップの年間データ、または7日以上の短期データ（年間拡張します）"
         )
         
-        if uploaded_file is not None:
+    if uploaded_file is not None:
             try:
                 encodings = ['utf-8', 'shift-jis', 'cp932', 'euc-jp', 'iso-2022-jp']
                 df = None
