@@ -1,5 +1,5 @@
 """
-年間容量シミュレーション専用アプリケーション（SOC引き継ぎ対応版）
+年間容量シミュレーション専用アプリケーション（SOC引き継ぎ対応版・デバッグ済み）
 複数容量での年間需要平準化効果比較を実行
 """
 
@@ -53,121 +53,7 @@ class AnnualBatteryCapacityComparator:
         
         if len(demand_array) < expected_steps:
             if len(demand_array) >= 96:
-                # 月別トレンド
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                monthly_peak_data = []
-                for month in range(1, 13):
-                    if month in monthly_summary:
-                        monthly_peak_data.append({
-                            'month': month_names[month-1],
-                            'peak_reduction': monthly_summary[month]['peak_reduction']
-                        })
-                
-                if monthly_peak_data:
-                    fig_monthly_peak = px.line(
-                        pd.DataFrame(monthly_peak_data),
-                        x='month', y='peak_reduction',
-                        title=f"月別ピーク削減トレンド（容量{selected_capacity:,}kWh・SOC引き継ぎ）"
-                    )
-                    st.plotly_chart(fig_monthly_peak, use_container_width=True)
-            
-            with col2:
-                monthly_soc_data = []
-                for month in range(1, 13):
-                    if month in monthly_summary:
-                        monthly_soc_data.append({
-                            'month': month_names[month-1],
-                            'month_end_soc': monthly_summary[month].get('month_end_soc', 50)
-                        })
-                
-                if monthly_soc_data:
-                    fig_monthly_soc = px.line(
-                        pd.DataFrame(monthly_soc_data),
-                        x='month', y='month_end_soc',
-                        title=f"月別SOC推移（容量{selected_capacity:,}kWh）"
-                    )
-                    fig_monthly_soc.update_yaxes(range=[0, 100])
-                    st.plotly_chart(fig_monthly_soc, use_container_width=True)
-        
-        elif detail_mode == "日別詳細" and 'daily_results' in results[selected_capacity]:
-            # 日別詳細表示（SOC情報追加）
-            daily_results = results[selected_capacity]['daily_results']
-            
-            # 月選択
-            selected_month = st.selectbox(
-                "表示する月",
-                list(range(1, 13)),
-                index=0,
-                format_func=lambda x: f"{x}月",
-                key="selected_month_detail"
-            )
-            
-            # 選択月の日別データ抽出
-            month_daily_data = []
-            for day, result in daily_results.items():
-                # 日から月を計算（簡易版）
-                day_month = annual_comparator._get_month_from_day(day - 1)
-                if day_month == selected_month:
-                    month_daily_data.append({
-                        '日': day,
-                        '日付': f"{selected_month}月{annual_comparator._get_day_in_month(day - 1)}日",
-                        'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
-                        '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
-                        '需要幅改善(kW)': f"{result['range_improvement']:.1f}",
-                        '初期SOC(%)': f"{result.get('initial_soc', 50):.1f}",
-                        '最終SOC(%)': f"{result.get('final_soc', 50):.1f}",
-                        'SOC変化': f"{result.get('final_soc', 50) - result.get('initial_soc', 50):+.1f}"
-                    })
-            
-            if month_daily_data:
-                daily_df = pd.DataFrame(month_daily_data)
-                st.dataframe(daily_df, use_container_width=True)
-                
-                # 日別トレンド（選択月）
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    fig_daily_peak = px.line(
-                        daily_df,
-                        x='日付', y='ピーク削減(kW)',
-                        title=f"{selected_month}月の日別ピーク削減トレンド"
-                    )
-                    fig_daily_peak.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_daily_peak, use_container_width=True)
-                
-                with col2:
-                    # SOC変化のグラフ
-                    fig_daily_soc = go.Figure()
-                    
-                    # 初期SOCと最終SOCをプロット
-                    fig_daily_soc.add_trace(go.Scatter(
-                        x=daily_df['日付'],
-                        y=pd.to_numeric(daily_df['初期SOC(%)'].str.replace('%', '')),
-                        name="初期SOC",
-                        line=dict(color="blue", width=2)
-                    ))
-                    
-                    fig_daily_soc.add_trace(go.Scatter(
-                        x=daily_df['日付'],
-                        y=pd.to_numeric(daily_df['最終SOC(%)'].str.replace('%', '')),
-                        name="最終SOC",
-                        line=dict(color="red", width=2)
-                    ))
-                    
-                    fig_daily_soc.update_layout(
-                        title=f"{selected_month}月の日別SOC推移",
-                        xaxis_title="日付",
-                        yaxis_title="SOC (%)",
-                        yaxis=dict(range=[0, 100])
-                    )
-                    fig_daily_soc.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_daily_soc, use_container_width=True)
-            else:
-                st.info(f"{selected_month}月のデータがありません")
-                
-    """日単位データの場合、年間に拡張"""
+                # 日単位データの場合、年間に拡張
                 days_available = len(demand_array) // 96
                 if days_available < 7:
                     raise ValueError(f"最低7日分のデータが必要です（現在: {days_available}日分）")
