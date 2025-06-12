@@ -1157,7 +1157,7 @@ def display_annual_results():
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["年間需要比較", "SOC推移分析", "季節別分析", "月別詳細", "推奨容量"])
     
     with tab1:
-        (results, capacity_list, annual_demand)
+        show_annual_demand_comparison(results, capacity_list, annual_demand)
     
     with tab2:
         show_soc_analysis(results, capacity_list)
@@ -1650,7 +1650,7 @@ def show_soc_analysis(results, capacity_list):
             st.metric("平均SOC", f"{soc_stats.get('soc_average', 50):.1f}%")
         
         # 年間SOC推移グラフ
-            st.subheader("SOC統計比較")
+        st.subheader("SOC統計比較")
     
     col1, col2 = st.columns(2)
     
