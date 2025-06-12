@@ -202,8 +202,7 @@ class AnnualBatteryCapacityComparator:
     def run_annual_capacity_comparison(self, annual_demand, capacity_list, 
                                      cycle_target_ratio=365.0, cycle_tolerance=5000,
                                      optimization_trials=20, power_scaling_method='capacity_ratio',
-                                     manual_scaling_ratio=16.0, manual_base_power=0, 
-                                     manual_powers=None, use_parallel=True):
+                                     use_parallel=True):
         """年間容量別シミュレーション実行"""
         
         # データ検証
@@ -231,13 +230,12 @@ class AnnualBatteryCapacityComparator:
                     max_power = capacity / 16
                 elif power_scaling_method == 'custom':
                     max_power = capacity / 20
-                elif power_scaling_method == 'fixed':
-                    max_power = 3000
-                elif power_scaling_method == 'manual':
-                    if manual_powers and i < len(manual_powers):
-                        max_power = manual_powers[i]
+                elif power_scaling_method == 'individual':
+                    # 個別入力から対応する出力を取得
+                    if hasattr(st.session_state, 'sim_individual_powers') and i < len(st.session_state.sim_individual_powers):
+                        max_power = st.session_state.sim_individual_powers[i]
                     else:
-                        max_power = capacity / manual_scaling_ratio + manual_base_power
+                        max_power = capacity / 16  # フォールバック
                 else:
                     max_power = capacity / 16
                 
@@ -704,17 +702,79 @@ def show_simulation_config_section():
         
         # 最大出力設定
         st.subheader("最大出力設定")
-        st.session_state.sim_power_scaling_method = st.selectbox(
-            "最大出力決定方法",
-            ["capacity_ratio", "fixed", "custom"],
-            index=["capacity_ratio", "fixed", "custom"].index(st.session_state.sim_power_scaling_method),
-            format_func=lambda x: {
-                "capacity_ratio": "容量比例（容量÷16）",
-                "fixed": "固定値（3000kW）",
-                "custom": "カスタム比率（容量÷20）"
-            }[x],
-            key="power_scaling_select"
-        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.session_state.sim_power_scaling_method = st.selectbox(
+                "最大出力決定方法",
+                ["capacity_ratio", "custom", "individual"],
+                index=["capacity_ratio", "custom", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "custom", "individual"] else 0,
+                format_func=lambda x: {
+                    "capacity_ratio": "容量比例（容量÷16）",
+                    "custom": "カスタム比率（容量÷20）",
+                    "individual": "個別入力"
+                }[x],
+                key="power_scaling_select"
+            )
+        
+        with col2:
+            if st.session_state.sim_power_scaling_method == "capacity_ratio":
+                st.info("各容量を16で割った値を最大出力とします")
+            elif st.session_state.sim_power_scaling_method == "custom":
+                st.info("各容量を20で割った値を最大出力とします")
+            elif st.session_state.sim_power_scaling_method == "individual":
+                st.info("各容量に対して個別に最大出力を設定します")
+        
+        # 個別入力の場合の設定欄
+        if st.session_state.sim_power_scaling_method == "individual":
+            st.write("**各容量の最大出力を個別設定:**")
+            
+            # セッション状態で個別最大出力を保存
+            if 'sim_individual_powers' not in st.session_state:
+                # デフォルト値として容量÷16を設定
+                st.session_state.sim_individual_powers = [
+                    cap // 16 for cap in st.session_state.sim_individual_capacities
+                ]
+            
+            power_cols = st.columns(5)
+            
+            for i in range(st.session_state.sim_num_capacities):
+                with power_cols[i]:
+                    # 対応する容量を取得
+                    capacity = st.session_state.sim_individual_capacities[i]
+                    
+                    # デフォルト値を容量÷16に設定（まだ設定されていない場合）
+                    if i >= len(st.session_state.sim_individual_powers):
+                        st.session_state.sim_individual_powers.append(capacity // 16)
+                    
+                    st.session_state.sim_individual_powers[i] = st.number_input(
+                        f"出力{i+1} (kW)\n容量: {capacity:,}kWh",
+                        value=st.session_state.sim_individual_powers[i],
+                        min_value=100, max_value=50000, step=100,
+                        key=f"individual_power_{i}_input",
+                        help=f"容量{capacity:,}kWh に対する最大出力"
+                    )
+            
+            # 未使用の列は空白
+            for i in range(st.session_state.sim_num_capacities, 5):
+                with power_cols[i]:
+                    st.text_input(f"出力{i+1} (kW)", value="未使用", disabled=True, key=f"unused_power_{i}")
+            
+            # 出力/容量比の表示
+            st.write("**出力/容量比 確認:**")
+            ratio_data = []
+            for i in range(st.session_state.sim_num_capacities):
+                capacity = st.session_state.sim_individual_capacities[i]
+                power = st.session_state.sim_individual_powers[i]
+                ratio = capacity / power if power > 0 else 0
+                ratio_data.append({
+                    f'容量{i+1}': f"{capacity:,}kWh",
+                    f'出力{i+1}': f"{power:,}kW",
+                    f'比率{i+1}': f"1:{ratio:.1f}" if ratio > 0 else "設定エラー"
+                })
+            
+            ratio_df = pd.DataFrame(ratio_data)
+            st.dataframe(ratio_df, use_container_width=True)
         
         # 年間最適化設定
         st.subheader("年間最適化設定")
