@@ -964,6 +964,447 @@ def main():
     # 発電機数設定
     num_generators = st.number_input("発電機台数", min_value=1, max_value=20, value=8)
     
+    # 発電機設定フォーム
+    generators_config = []
+    
+    cols = st.columns(2)
+    for i in range(num_generators):
+        default_config = get_default_generator_config(i)
+        
+        with cols[i % 2]:
+            with st.expander(f"発電機 {i+1}", expanded=True):
+                name = st.text_input(f"名前", value=default_config["name"], key=f"name_{i}")
+                unit_type = st.selectbox(f"タイプ", ["DG", "GT"], 
+                                       index=0 if default_config["type"] == "DG" else 1, key=f"type_{i}")
+                
+                # 基本設定
+                col1, col2 = st.columns(2)
+                with col1:
+                    min_output = st.number_input(f"最小出力 (kW)", min_value=0.0, 
+                                               value=float(default_config["min"]), key=f"min_{i}")
+                    max_output = st.number_input(f"最大出力 (kW)", min_value=0.0, 
+                                               value=float(default_config["max"]), key=f"max_{i}")
+                    priority = st.number_input(f"優先順位", min_value=1, max_value=100, 
+                                             value=default_config["priority"], key=f"priority_{i}")
+                
+                with col2:
+                    min_run_time = st.number_input(f"最小運転時間 (時間)", min_value=0.0, value=2.0, key=f"run_time_{i}")
+                    min_stop_time = st.number_input(f"最小停止時間 (時間)", min_value=0.0, value=1.0, key=f"stop_time_{i}")
+                    is_must_run = st.checkbox(f"マストラン", key=f"must_run_{i}")
+                
+                # 燃費特性設定
+                st.write("**🔥 燃料消費量特性係数**")
+                st.write("*燃料消費量 = a×P² + b×P + c [kL/h]*")
+                
+                col3, col4, col5 = st.columns(3)
+                with col3:
+                    heat_rate_a = st.number_input(f"a係数 (2次)", value=default_config["heat_a"], 
+                                                step=1e-07, format="%.2e", key=f"heat_a_{i}")
+                with col4:
+                    heat_rate_b = st.number_input(f"b係数 (1次)", value=default_config["heat_b"], 
+                                                step=0.001, format="%.4f", key=f"heat_b_{i}")
+                with col5:
+                    heat_rate_c = st.number_input(f"c係数 (定数)", value=default_config["heat_c"], 
+                                                step=1.0, key=f"heat_c_{i}")
+                
+                # 燃料単価
+                fuel_price = st.number_input(f"燃料単価 (円/kL)", value=60354.0, step=100.0, key=f"fuel_price_{i}")
+                
+                generator = GeneratorConfig(
+                    name=name,
+                    min_output=min_output,
+                    max_output=max_output,
+                    priority=priority,
+                    min_run_time=min_run_time,
+                    min_stop_time=min_stop_time,
+                    is_must_run=is_must_run,
+                    unit_type=unit_type,
+                    heat_rate_a=heat_rate_a,
+                    heat_rate_b=heat_rate_b,
+                    heat_rate_c=heat_rate_c,
+                    fuel_price=fuel_price
+                )
+                generators_config.append(generator)
+    
+    # 発電機設定を保存
+    if st.button("発電機設定を保存"):
+        st.session_state.solver.generators = generators_config
+        st.session_state.generators_configured = True
+        st.success("✅ 発電機設定を保存しました")
+    
+    # 3. 計算実行
+    st.header("⚡ 構成計算・経済配分実行")
+    
+    if st.session_state.demand_loaded and st.session_state.generators_configured:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔧 構成計算のみ実行", type="secondary"):
+                with st.spinner("構成計算中..."):
+                    try:
+                        result = st.session_state.solver.solve_unit_commitment()
+                        st.session_state.uc_result = result
+                        st.success("✅ 構成計算完了！")
+                    except Exception as e:
+                        st.error(f"❌ 構成計算エラー: {e}")
+        
+        with col2:
+            if st.button("🚀 構成計算＋経済配分実行", type="primary"):
+                with st.spinner("計算中..."):
+                    try:
+                        # 構成計算
+                        uc_result = st.session_state.solver.solve_unit_commitment()
+                        st.session_state.uc_result = uc_result
+                        
+                        # 経済配分計算
+                        ed_result = st.session_state.ed_solver.solve_economic_dispatch(
+                            uc_result['generators'],
+                            uc_result['demand_data'],
+                            uc_result['output_flags']
+                        )
+                        st.session_state.ed_result = ed_result
+                        
+                        st.success("✅ 構成計算＋経済配分完了！")
+                    except Exception as e:
+                        st.error(f"❌ 計算エラー: {e}")
+    else:
+        missing = []
+        if not st.session_state.demand_loaded:
+            missing.append("需要データ")
+        if not st.session_state.generators_configured:
+            missing.append("発電機設定")
+        st.warning(f"⚠️ 以下の設定が必要です: {', '.join(missing)}")
+    
+    # 4. 結果表示
+    if 'uc_result' in st.session_state and st.session_state.uc_result:
+        st.header("📈 計算結果")
+        
+        uc_result = st.session_state.uc_result
+        
+        # タブで結果を分離
+        if 'ed_result' in st.session_state and st.session_state.ed_result:
+            tab1, tab2 = st.tabs(["📊 構成計算結果", "⚡ 経済配分結果"])
+            
+            with tab1:
+                # 構成計算チャート
+                fig_uc = create_unit_commitment_chart(uc_result)
+                st.plotly_chart(fig_uc, use_container_width=True)
+            
+            with tab2:
+                # 経済配分チャート
+                ed_result = st.session_state.ed_result
+                fig_ed = create_economic_dispatch_chart(uc_result, ed_result)
+                st.plotly_chart(fig_ed, use_container_width=True)
+                
+                # 経済配分統計
+                st.subheader("💰 経済配分統計")
+                
+                lambda_stats = {
+                    'λ最小値': f"{ed_result['lambda_values'].min():.3f}",
+                    'λ最大値': f"{ed_result['lambda_values'].max():.3f}",
+                    'λ平均値': f"{ed_result['lambda_values'].mean():.3f}",
+                    'λ標準偏差': f"{ed_result['lambda_values'].std():.3f}"
+                }
+                
+                col1, col2, col3, col4 = st.columns(4)
+                for i, (key, value) in enumerate(lambda_stats.items()):
+                    with [col1, col2, col3, col4][i]:
+                        st.metric(key, value)
+                
+                # 燃料費統計
+                if 'total_costs' in ed_result:
+                    costs = ed_result['total_costs']
+                    st.subheader("🔥 燃料費統計")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("総燃料費", f"{costs['total_cost']:.0f} 円")
+                    with col2:
+                        st.metric("平均燃料費", f"{costs['average_cost_per_hour']:.0f} 円/時")
+        else:
+            # 構成計算結果のみ
+            fig_uc = create_unit_commitment_chart(uc_result)
+            st.plotly_chart(fig_uc, use_container_width=True)
+        
+        # 統計情報
+        st.subheader("📊 運転統計")
+        
+        generators = uc_result['generators']
+        output_flags = uc_result['output_flags']
+        
+        stats_data = []
+        for i, gen in enumerate(generators):
+            running_steps = np.sum(output_flags[i, :] == 1)
+            starting_steps = np.sum(output_flags[i, :] == 2)
+            running_hours = running_steps * 0.25
+            utilization = (running_steps / 96) * 100
+            
+            # 起動回数計算
+            start_count = 0
+            for j in range(1, 96):
+                if output_flags[i, j] == 2 and output_flags[i, j-1] == 0:
+                    start_count += 1
+            
+            # 経済配分結果がある場合は出力統計も追加
+            if 'ed_result' in st.session_state and st.session_state.ed_result:
+                ed_result = st.session_state.ed_result
+                power_outputs = ed_result['power_outputs']
+                avg_output = np.mean(power_outputs[i, power_outputs[i, :] > 0]) if np.any(power_outputs[i, :] > 0) else 0
+                max_output = np.max(power_outputs[i, :])
+                total_generation = np.sum(power_outputs[i, :]) * 0.25  # kWh
+                
+                stats_data.append({
+                    '発電機': gen.name,
+                    'タイプ': gen.unit_type,
+                    '優先順位': gen.priority,
+                    '運転時間': f"{running_hours:.1f}h",
+                    '稼働率': f"{utilization:.1f}%",
+                    '起動回数': start_count,
+                    '平均出力': f"{avg_output:.1f} kW",
+                    '最大出力': f"{max_output:.1f} kW",
+                    '総発電量': f"{total_generation:.1f} kWh",
+                    'マストラン': '○' if gen.is_must_run else '×'
+                })
+            else:
+                stats_data.append({
+                    '発電機': gen.name,
+                    'タイプ': gen.unit_type,
+                    '優先順位': gen.priority,
+                    '運転時間': f"{running_hours:.1f}h",
+                    '稼働率': f"{utilization:.1f}%",
+                    '起動回数': start_count,
+                    'マストラン': '○' if gen.is_must_run else '×'
+                })
+        
+        stats_df = pd.DataFrame(stats_data)
+        st.dataframe(stats_df, use_container_width=True)
+        
+        # デバッグ情報表示
+        if st.checkbox("🔍 詳細計算ログを表示"):
+            st.subheader("📝 計算プロセス詳細")
+            
+            # 時間範囲選択
+            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0)
+            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23)
+            
+            debug_info = uc_result.get('debug_info', [])
+            
+            for debug_step in debug_info:
+                hour = debug_step['hour']
+                if start_hour <= hour <= end_hour and debug_step['actions']:
+                    with st.expander(f"⏰ {hour:.2f}時 (ステップ {debug_step['time_step']})"):
+                        st.write(f"**需要**: {debug_step['demand']:.0f} kW")
+                        st.write(f"**将来需要**: {debug_step['future_demand']:.0f} kW")
+                        
+                        # 経済配分結果があればλ値も表示
+                        if 'ed_result' in st.session_state and st.session_state.ed_result:
+                            lambda_val = st.session_state.ed_result['lambda_values'][debug_step['time_step']]
+                            st.write(f"**λ値**: {lambda_val:.3f}")
+                        
+                        st.write("**アクション**:")
+                        for action in debug_step['actions']:
+                            st.write(f"- {action}")
+        
+        # 計算パラメータ表示
+        with st.expander("⚙️ 計算パラメータ"):
+            margins = uc_result.get('margins', {})
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**構成計算パラメータ**")
+                st.write(f"- DG起動マージン: {margins.get('dg_start', 0)*100:.1f}%")
+                st.write(f"- GT起動マージン: {margins.get('gt_start', 0)*100:.1f}%")
+                st.write(f"- DG解列マージン: {margins.get('dg_stop', 0)*100:.1f}%")
+                st.write(f"- GT解列マージン: {margins.get('gt_stop', 0)*100:.1f}%")
+            
+            with col2:
+                if 'ed_result' in st.session_state:
+                    st.write("**経済配分パラメータ**")
+                    st.write(f"- λ探索範囲: {st.session_state.ed_solver.lambda_min} - {st.session_state.ed_solver.lambda_max}")
+                    st.write(f"- λ許容誤差: {st.session_state.ed_solver.lambda_tolerance} kW")
+                    st.write(f"- 最大反復回数: {st.session_state.ed_solver.max_iterations}")
+        
+        # CSVダウンロード
+        st.subheader("💾 結果ダウンロード")
+        
+        # 結果をCSV形式で準備
+        time_labels = [f"{(i*15)//60:02d}:{(i*15)%60:02d}" for i in range(96)]
+        
+        if 'ed_result' in st.session_state and st.session_state.ed_result:
+            # 経済配分結果を含むCSV
+            ed_result = st.session_state.ed_result
+            
+            # 発電機出力データ
+            output_df = pd.DataFrame(ed_result['power_outputs'].T, columns=[gen.name for gen in generators])
+            output_df.insert(0, '時刻', time_labels)
+            output_df.insert(1, '需要', uc_result['demand_data'])
+            output_df.insert(2, 'λ値', ed_result['lambda_values'])
+            
+            # 発電機状態データ
+            status_df = pd.DataFrame(output_flags.T, columns=[f"{gen.name}_状態" for gen in generators])
+            
+            # 結合
+            result_df = pd.concat([output_df, status_df], axis=1)
+            
+            # 燃料費データ
+            if 'total_costs' in ed_result and 'individual_costs' in ed_result['total_costs']:
+                fuel_costs = ed_result['total_costs']['individual_costs']
+                fuel_df = pd.DataFrame(fuel_costs.T, columns=[f"{gen.name}_燃料費" for gen in generators])
+                result_df = pd.concat([result_df, fuel_df], axis=1)
+            
+            csv_buffer = io.StringIO()
+            result_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📥 経済配分結果をCSVダウンロード",
+                    data=csv_buffer.getvalue(),
+                    file_name="economic_dispatch_result.csv",
+                    mime="text/csv"
+                )
+            
+            # λ値のみのダウンロード
+            lambda_df = pd.DataFrame({
+                '時刻': time_labels,
+                'λ値': ed_result['lambda_values']
+            })
+            
+            lambda_buffer = io.StringIO()
+            lambda_df.to_csv(lambda_buffer, index=False, encoding='utf-8-sig')
+            
+            with col2:
+                st.download_button(
+                    label="📊 λ値データをCSVダウンロード",
+                    data=lambda_buffer.getvalue(),
+                    file_name="lambda_values.csv",
+                    mime="text/csv"
+                )
+        else:
+            # 構成計算結果のみ
+            output_df = pd.DataFrame(output_flags.T, columns=[gen.name for gen in generators])
+            output_df.insert(0, '時刻', time_labels)
+            output_df.insert(1, '需要', uc_result['demand_data'])
+            
+            csv_buffer = io.StringIO()
+            output_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            
+            st.download_button(
+                label="📥 構成計算結果をCSVダウンロード",
+                data=csv_buffer.getvalue(),
+                file_name="unit_commitment_result.csv",
+                mime="text/csv"
+            )
+
+if __name__ == "__main__":
+    main()
+    st.markdown('<div class="main-header"><h1>⚡ 発電機構成計算ツール</h1></div>', 
+                unsafe_allow_html=True)
+    
+    # セッション状態初期化
+    if 'solver' not in st.session_state:
+        st.session_state.solver = UnitCommitmentSolver()
+    if 'ed_solver' not in st.session_state:
+        st.session_state.ed_solver = EconomicDispatchSolver()
+    if 'demand_loaded' not in st.session_state:
+        st.session_state.demand_loaded = False
+    if 'generators_configured' not in st.session_state:
+        st.session_state.generators_configured = False
+    
+    # サイドバー：計算設定
+    with st.sidebar:
+        st.header("⚙️ 計算設定")
+        
+        # Unit Commitment設定
+        st.subheader("📋 構成計算設定")
+        margin_dg = st.slider("DGマージン率 (%)", 0, 30, 10) / 100
+        margin_gt = st.slider("GTマージン率 (%)", 0, 30, 15) / 100
+        stop_margin_dg = st.slider("DG解列マージン率 (%)", 0, 20, 5) / 100
+        stop_margin_gt = st.slider("GT解列マージン率 (%)", 0, 20, 8) / 100
+        
+        st.session_state.solver.margin_rate_dg = margin_dg
+        st.session_state.solver.margin_rate_gt = margin_gt
+        st.session_state.solver.stop_margin_rate_dg = stop_margin_dg
+        st.session_state.solver.stop_margin_rate_gt = stop_margin_gt
+        
+        # Economic Dispatch設定
+        st.subheader("⚡ 経済配分設定")
+        lambda_min = st.number_input("λ最小値", value=0.0, step=1.0)
+        lambda_max = st.number_input("λ最大値", value=100.0, step=1.0)
+        lambda_tolerance = st.number_input("λ許容誤差 (kW)", value=0.001, step=0.001, format="%.3f")
+        
+        st.session_state.ed_solver.lambda_min = lambda_min
+        st.session_state.ed_solver.lambda_max = lambda_max
+        st.session_state.ed_solver.lambda_tolerance = lambda_tolerance
+    
+    # 1. 需要データアップロード
+    st.header("📊 需要予測データアップロード")
+    uploaded_file = st.file_uploader("需要予測CSV（96ステップ、15分間隔）", type=['csv'])
+    
+    if uploaded_file is not None:
+        try:
+            # エンコーディング自動検出
+            encodings = ['utf-8', 'shift-jis', 'cp932', 'euc-jp', 'iso-2022-jp']
+            df = None
+            
+            for encoding in encodings:
+                try:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding=encoding)
+                    st.success(f"✅ エンコーディング: {encoding} で読み込み成功")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if df is None:
+                st.error("❌ サポートされているエンコーディングで読み込めませんでした")
+            elif len(df.columns) >= 2:
+                # データプレビュー
+                st.subheader("📋 データプレビュー")
+                st.dataframe(df.head(10))
+                
+                # 列選択
+                time_column = st.selectbox("時刻列を選択", df.columns, index=0)
+                demand_column = st.selectbox("需要データ列を選択", df.columns, index=1)
+                
+                if len(df) >= 96:
+                    try:
+                        demand_values = pd.to_numeric(df[demand_column], errors='coerce').values
+                        demand_data = demand_values[:96]
+                        st.session_state.solver.set_demand_data(demand_data)
+                        st.session_state.demand_loaded = True
+                        
+                        valid_count = np.sum(~np.isnan(demand_data))
+                        st.success(f"✅ 需要予測データ読み込み完了（{valid_count}/96ステップ有効）")
+                        
+                        # 需要データ統計
+                        valid_demands = demand_data[~np.isnan(demand_data)]
+                        if len(valid_demands) > 0:
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("最小値", f"{valid_demands.min():.0f} kW")
+                            with col2:
+                                st.metric("平均値", f"{valid_demands.mean():.0f} kW")
+                            with col3:
+                                st.metric("最大値", f"{valid_demands.max():.0f} kW")
+                            with col4:
+                                st.metric("需要幅", f"{valid_demands.max() - valid_demands.min():.0f} kW")
+                        
+                    except Exception as e:
+                        st.error(f"❌ 需要データの変換エラー: {e}")
+                else:
+                    st.error(f"❌ データが96ステップ未満です（現在: {len(df)}ステップ）")
+            else:
+                st.error("❌ CSVファイルに最低2列（時刻、需要）が必要です")
+                
+        except Exception as e:
+            st.error(f"❌ ファイル読み込みエラー: {e}")
+    
+    # 2. 発電機設定
+    st.header("🔧 発電機設定")
+    
+    # 発電機数設定
+    num_generators = st.number_input("発電機台数", min_value=1, max_value=20, value=8)
+    
 def get_default_generator_config(index: int) -> dict:
     """デフォルト発電機設定を取得"""
     defaults = {
