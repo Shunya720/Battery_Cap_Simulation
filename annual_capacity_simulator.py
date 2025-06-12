@@ -496,14 +496,12 @@ class AnnualBatteryCapacityComparator:
                 '年間放電量(MWh)': f"{result['annual_discharge']/1000:.1f}",
                 'サイクル制約目標(MWh)': f"{cycle_target/1000:.1f}",
                 'サイクル制約実績(MWh)': f"{cycle_actual/1000:.1f}",
-                'サイクル目標/実績': f"{cycle_target/1000:.1f}/{cycle_actual/1000:.1f}",
                 'サイクル数目標': f"{target_cycles:.0f}回",
                 'サイクル数実績': f"{actual_cycles:.0f}回",
                 'サイクル数達成率(%)': f"{(actual_cycles/target_cycles*100):.1f}" if target_cycles > 0 else "0.0",
                 '年間サイクル制約': 'OK' if result['annual_cycle_constraint_satisfied'] else 'NG',
                 '初期SOC(%)': f"{soc_stats.get('initial_soc', 50):.1f}",
                 '最終SOC(%)': f"{soc_stats.get('final_soc', 50):.1f}",
-                'SOC変化': f"{soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50):+.1f}",
                 'SOC範囲(%)': f"{soc_stats.get('soc_range', 0):.1f}",
                 '平均SOC(%)': f"{soc_stats.get('soc_average', 50):.1f}",
                 '春ピーク削減(kW)': f"{result['seasonal_stats']['spring']['peak_reduction']:.1f}",
@@ -1081,7 +1079,6 @@ def display_annual_results():
             '容量(kWh)': f"{capacity:,}",
             '初期SOC(%)': f"{soc_stats.get('initial_soc', 50):.1f}",
             '最終SOC(%)': f"{soc_stats.get('final_soc', 50):.1f}",
-            'SOC変化': f"{soc_stats.get('final_soc', 50) - soc_stats.get('initial_soc', 50):+.1f}",
             'SOC範囲(%)': f"{soc_stats.get('soc_range', 0):.1f}",
             '平均SOC(%)': f"{soc_stats.get('soc_average', 50):.1f}"
         })
