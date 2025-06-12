@@ -1674,7 +1674,6 @@ def main():
                         label="平均需要", 
                         value=f"{metrics['demand_avg']:.0f} kW"
                     )
-                    )
 
 if __name__ == "__main__":
     main()
