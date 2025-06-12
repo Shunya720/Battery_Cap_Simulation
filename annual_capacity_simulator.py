@@ -1775,4 +1775,4 @@ def show_download_section(summary_df, results, annual_comparator):
 
 
 if __name__ == "__main__":
-    main()"""
+    main()
