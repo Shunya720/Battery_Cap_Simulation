@@ -48,7 +48,8 @@ class GeneratorConfig:
                  priority: int, min_run_time: float, min_stop_time: float, 
                  is_must_run: bool = False, unit_type: str = "DG",
                  heat_rate_a: float = 0.0, heat_rate_b: float = 10.0, 
-                 heat_rate_c: float = 0.0, fuel_price: float = 60354.0):
+                 heat_rate_c: float = 0.0, fuel_price: float = 60354.0,
+                 startup_cost: float = 0.0, shutdown_cost: float = 0.0):
         self.name = name
         self.min_output = min_output
         self.max_output = max_output
@@ -62,6 +63,8 @@ class GeneratorConfig:
         self.heat_rate_b = heat_rate_b  # 1次係数
         self.heat_rate_c = heat_rate_c  # 定数項
         self.fuel_price = fuel_price    # 燃料単価 [円/kL]
+        self.startup_cost = startup_cost  # 起動費 [円]
+        self.shutdown_cost = shutdown_cost  # 停止費 [円]
 
 class EconomicDispatchSolver:
     def __init__(self):
@@ -211,15 +214,20 @@ class EconomicDispatchSolver:
     
     def calculate_fuel_costs(self, generators: List[GeneratorConfig], 
                            power_outputs: np.ndarray, output_flags: np.ndarray) -> Dict:
-        """燃料費計算"""
+        """燃料費・起動停止費計算"""
         time_steps = power_outputs.shape[1]
         gen_count = len(generators)
         
         fuel_costs = np.zeros((gen_count, time_steps))
+        startup_costs = np.zeros((gen_count, time_steps))
+        shutdown_costs = np.zeros((gen_count, time_steps))
         total_fuel_cost = 0.0
+        total_startup_cost = 0.0
+        total_shutdown_cost = 0.0
         
         for i, gen in enumerate(generators):
             for t in range(time_steps):
+                # 燃料費計算（運転中のみ）
                 if output_flags[i, t] == 1:  # 運転中のみ
                     power = power_outputs[i, t]
                     # 燃料費 = (a*P^2 + b*P + c) * u * 0.25 (15分間隔なので1/4時間)
@@ -227,11 +235,31 @@ class EconomicDispatchSolver:
                     cost = fuel_consumption * gen.fuel_price * 0.25
                     fuel_costs[i, t] = cost
                     total_fuel_cost += cost
+                
+                # 起動費計算
+                if t > 0 and output_flags[i, t-1] == 0 and output_flags[i, t] >= 1:  # 停止→運転（起動中含む）
+                    startup_costs[i, t] = gen.startup_cost
+                    total_startup_cost += gen.startup_cost
+                elif t == 0 and output_flags[i, t] >= 1:  # 初期時刻で運転開始
+                    startup_costs[i, t] = gen.startup_cost
+                    total_startup_cost += gen.startup_cost
+                
+                # 停止費計算
+                if t > 0 and output_flags[i, t-1] >= 1 and output_flags[i, t] == 0:  # 運転→停止
+                    shutdown_costs[i, t] = gen.shutdown_cost
+                    total_shutdown_cost += gen.shutdown_cost
+        
+        total_cost = total_fuel_cost + total_startup_cost + total_shutdown_cost
         
         return {
             'individual_costs': fuel_costs,
-            'total_cost': total_fuel_cost,
-            'average_cost_per_hour': total_fuel_cost / 24
+            'startup_costs': startup_costs,
+            'shutdown_costs': shutdown_costs,
+            'total_cost': total_cost,
+            'total_fuel_cost': total_fuel_cost,
+            'total_startup_cost': total_startup_cost,
+            'total_shutdown_cost': total_shutdown_cost,
+            'average_cost_per_hour': total_cost / 24
         }
 
 class UnitCommitmentSolver:
