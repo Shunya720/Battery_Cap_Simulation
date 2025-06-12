@@ -274,8 +274,8 @@ class AnnualBatteryCapacityComparator:
                 st.write(f"容量 {capacity:,}kWh の年間最適化開始 ({i+1}/{len(capacity_list)}) - SOC引き継ぎあり")
                 
                 # 容量に応じた設定（回数ベースに変更）
-                annual_cycle_target = int(capacity * cycle_target_ratio)  # 目標放電量(kWh)
-                daily_cycle_target = annual_cycle_target / 365  # 日別サイクル目標(kWh)
+                'annual_cycle_target': annual_cycle_target,      # 目標放電量(kWh)
+                'annual_discharge': actual_discharge_kwh,        # 実際の放電量(kWh)
                 
                 # 許容範囲をkWh換算（回数 × 容量）
                 cycle_tolerance_kwh = cycle_tolerance * capacity  # 回数 → kWh換算
@@ -408,7 +408,9 @@ class AnnualBatteryCapacityComparator:
                     'annual_range_improvement': ((np.max(validated_demand) - np.min(validated_demand)) - 
                                               (np.max(annual_demand_after_control) - np.min(annual_demand_after_control))) if len(annual_demand_after_control) > 0 else 0,
                     'annual_discharge': actual_discharge_kwh,
-                    'annual_cycles_actual': actual_cycles,  # 実際のサイクル数
+                    'annual_cycle_target_cycles': target_cycles,     # 目標サイクル数(回)
+                    'annual_cycles_actual': actual_cycles,           # 実際のサイクル数(回)
+                    'cycle_tolerance_cycles': cycle_tolerance,       # 許容回数(回)
                     'annual_cycle_constraint_satisfied': cycle_constraint_satisfied,  # 回数ベースで判定
                     'cycle_tolerance_cycles': cycle_tolerance,  # 許容回数
                     'daily_results': daily_results_for_capacity,
