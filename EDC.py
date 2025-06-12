@@ -717,7 +717,384 @@ def create_economic_dispatch_chart(uc_result: Dict, ed_result: Dict) -> go.Figur
     
     return fig
 
-def get_default_generator_config(index: int) -> dict:
+def generate_detailed_report(uc_result: Dict, ed_result: Dict = None) -> str:
+    """詳細レポートを生成"""
+    if not uc_result:
+        return "計算結果がありません。"
+    
+    generators = uc_result['generators']
+    output_flags = uc_result['output_flags']
+    demand_data = uc_result['demand_data']
+    time_steps = uc_result['time_steps']
+    
+    # レポート作成開始
+    report = []
+    report.append("# 🔍 発電機構成・経済配分 詳細レポート")
+    report.append(f"**生成日時**: {pd.Timestamp.now().strftime('%Y年%m月%d日 %H:%M:%S')}")
+    report.append("---")
+    
+    # 1. エグゼクティブサマリー
+    report.append("## 📋 エグゼクティブサマリー")
+    
+    # 需要統計
+    valid_demands = demand_data[~np.isnan(demand_data)]
+    min_demand = valid_demands.min()
+    max_demand = valid_demands.max()
+    avg_demand = valid_demands.mean()
+    
+    report.append(f"- **分析期間**: 24時間 (96 x 15分間隔)")
+    report.append(f"- **需要統計**: 最小 {min_demand:.0f} kW / 平均 {avg_demand:.0f} kW / 最大 {max_demand:.0f} kW")
+    report.append(f"- **発電機台数**: {len(generators)}台")
+    
+    # 総発電容量
+    total_capacity = sum(gen.max_output for gen in generators)
+    utilization_rate = (max_demand / total_capacity) * 100
+    report.append(f"- **総発電容量**: {total_capacity:.0f} kW")
+    report.append(f"- **最大需要時容量利用率**: {utilization_rate:.1f}%")
+    
+    # 経済配分結果がある場合
+    if ed_result:
+        total_cost = ed_result['total_costs']['total_cost']
+        avg_cost_per_hour = ed_result['total_costs']['average_cost_per_hour']
+        total_generation = np.sum(ed_result['power_outputs']) * 0.25  # kWh
+        avg_cost_per_kwh = total_cost / total_generation if total_generation > 0 else 0
+        
+        report.append(f"- **総燃料費**: {total_cost:,.0f} 円")
+        report.append(f"- **平均燃料費**: {avg_cost_per_hour:,.0f} 円/時")
+        report.append(f"- **総発電量**: {total_generation:,.0f} kWh")
+        report.append(f"- **平均発電コスト**: {avg_cost_per_kwh:.2f} 円/kWh")
+    
+    report.append("")
+    
+    # 2. 発電機別運転実績
+    report.append("## ⚡ 発電機別運転実績")
+    
+    for i, gen in enumerate(generators):
+        running_steps = np.sum(output_flags[i, :] == 1)
+        starting_steps = np.sum(output_flags[i, :] == 2)
+        running_hours = running_steps * 0.25
+        utilization = (running_steps / 96) * 100
+        
+        # 起動回数計算
+        start_count = 0
+        for j in range(1, 96):
+            if output_flags[i, j] == 2 and output_flags[i, j-1] == 0:
+                start_count += 1
+        
+        report.append(f"### {gen.name} ({gen.unit_type})")
+        report.append(f"- **容量**: {gen.min_output:.0f} - {gen.max_output:.0f} kW")
+        report.append(f"- **優先順位**: {gen.priority}")
+        report.append(f"- **運転時間**: {running_hours:.1f} 時間 ({utilization:.1f}%)")
+        report.append(f"- **起動回数**: {start_count} 回")
+        report.append(f"- **マストラン**: {'はい' if gen.is_must_run else 'いいえ'}")
+        
+        if ed_result:
+            power_outputs = ed_result['power_outputs']
+            gen_outputs = power_outputs[i, :]
+            running_outputs = gen_outputs[gen_outputs > 0]
+            
+            if len(running_outputs) > 0:
+                avg_output = np.mean(running_outputs)
+                max_output_actual = np.max(gen_outputs)
+                min_output_actual = np.min(running_outputs)
+                total_generation_gen = np.sum(gen_outputs) * 0.25
+                
+                # 燃料費計算
+                fuel_costs = ed_result['total_costs']['individual_costs']
+                gen_fuel_cost = np.sum(fuel_costs[i, :])
+                
+                report.append(f"- **平均出力**: {avg_output:.1f} kW")
+                report.append(f"- **出力範囲**: {min_output_actual:.1f} - {max_output_actual:.1f} kW")
+                report.append(f"- **発電量**: {total_generation_gen:,.1f} kWh")
+                report.append(f"- **燃料費**: {gen_fuel_cost:,.0f} 円")
+                
+                if total_generation_gen > 0:
+                    unit_cost = gen_fuel_cost / total_generation_gen
+                    report.append(f"- **単位発電コスト**: {unit_cost:.2f} 円/kWh")
+        
+        report.append("")
+    
+    # 3. 時間帯別分析
+    report.append("## 🕐 時間帯別分析")
+    
+    # ピーク時間帯の定義
+    peak_hours = list(range(68, 88))  # 17:00-22:00 (17*4 to 22*4)
+    off_peak_hours = [i for i in range(96) if i not in peak_hours]
+    
+    peak_demand = np.mean([demand_data[i] for i in peak_hours if i < len(demand_data)])
+    off_peak_demand = np.mean([demand_data[i] for i in off_peak_hours if i < len(demand_data)])
+    
+    report.append(f"### ピーク時間帯 (17:00-22:00)")
+    report.append(f"- **平均需要**: {peak_demand:.0f} kW")
+    
+    # ピーク時の運転台数
+    peak_running_units = []
+    for i in peak_hours:
+        if i < len(demand_data):
+            running_count = np.sum(output_flags[:, i] == 1)
+            peak_running_units.append(running_count)
+    
+    if peak_running_units:
+        avg_peak_units = np.mean(peak_running_units)
+        report.append(f"- **平均運転台数**: {avg_peak_units:.1f} 台")
+    
+    report.append(f"### オフピーク時間帯")
+    report.append(f"- **平均需要**: {off_peak_demand:.0f} kW")
+    
+    # オフピーク時の運転台数
+    off_peak_running_units = []
+    for i in off_peak_hours:
+        if i < len(demand_data):
+            running_count = np.sum(output_flags[:, i] == 1)
+            off_peak_running_units.append(running_count)
+    
+    if off_peak_running_units:
+        avg_off_peak_units = np.mean(off_peak_running_units)
+        report.append(f"- **平均運転台数**: {avg_off_peak_units:.1f} 台")
+    
+    load_factor = off_peak_demand / peak_demand if peak_demand > 0 else 0
+    report.append(f"- **負荷率**: {load_factor:.2f}")
+    report.append("")
+    
+    # 4. 経済性分析（経済配分結果がある場合）
+    if ed_result:
+        report.append("## 💰 経済性分析")
+        
+        lambda_values = ed_result['lambda_values']
+        power_outputs = ed_result['power_outputs']
+        fuel_costs = ed_result['total_costs']['individual_costs']
+        
+        # λ値分析
+        report.append("### λ値分析")
+        report.append(f"- **最小λ値**: {lambda_values.min():.3f}")
+        report.append(f"- **最大λ値**: {lambda_values.max():.3f}")
+        report.append(f"- **平均λ値**: {lambda_values.mean():.3f}")
+        report.append(f"- **λ値標準偏差**: {lambda_values.std():.3f}")
+        
+        # 時間帯別λ値
+        peak_lambda = np.mean([lambda_values[i] for i in peak_hours if i < len(lambda_values)])
+        off_peak_lambda = np.mean([lambda_values[i] for i in off_peak_hours if i < len(lambda_values)])
+        
+        report.append(f"- **ピーク時平均λ値**: {peak_lambda:.3f}")
+        report.append(f"- **オフピーク時平均λ値**: {off_peak_lambda:.3f}")
+        report.append("")
+        
+        # コスト分析
+        report.append("### 燃料費分析")
+        
+        # 発電機別コスト効率
+        report.append("#### 発電機別コスト効率")
+        cost_efficiency = []
+        for i, gen in enumerate(generators):
+            gen_outputs = power_outputs[i, :]
+            gen_costs = fuel_costs[i, :]
+            total_gen_output = np.sum(gen_outputs) * 0.25  # kWh
+            total_gen_cost = np.sum(gen_costs)
+            
+            if total_gen_output > 0:
+                unit_cost = total_gen_cost / total_gen_output
+                cost_efficiency.append((gen.name, unit_cost, total_gen_output, total_gen_cost))
+        
+        # コスト効率でソート
+        cost_efficiency.sort(key=lambda x: x[1])
+        
+        for name, unit_cost, total_output, total_cost in cost_efficiency:
+            report.append(f"- **{name}**: {unit_cost:.2f} 円/kWh (発電量: {total_output:,.1f} kWh, 燃料費: {total_cost:,.0f} 円)")
+        
+        report.append("")
+        
+        # 時間帯別コスト
+        peak_costs = []
+        off_peak_costs = []
+        
+        for i in range(96):
+            hour_cost = np.sum(fuel_costs[:, i]) * 4  # 15分→1時間換算
+            if i in peak_hours:
+                peak_costs.append(hour_cost)
+            else:
+                off_peak_costs.append(hour_cost)
+        
+        avg_peak_cost = np.mean(peak_costs) if peak_costs else 0
+        avg_off_peak_cost = np.mean(off_peak_costs) if off_peak_costs else 0
+        
+        report.append("#### 時間帯別燃料費")
+        report.append(f"- **ピーク時平均**: {avg_peak_cost:,.0f} 円/時")
+        report.append(f"- **オフピーク時平均**: {avg_off_peak_cost:,.0f} 円/時")
+        report.append("")
+    
+    # 5. 運用制約分析
+    report.append("## ⚙️ 運用制約分析")
+    
+    # 最小運転・停止時間制約違反チェック
+    constraint_violations = []
+    
+    for i, gen in enumerate(generators):
+        min_run_steps = int(gen.min_run_time * 4)
+        min_stop_steps = int(gen.min_stop_time * 4)
+        
+        # 運転期間分析
+        current_run = 0
+        current_stop = 0
+        run_violations = 0
+        stop_violations = 0
+        
+        for t in range(96):
+            if output_flags[i, t] == 1:  # 運転中
+                if current_stop > 0 and current_stop < min_stop_steps:
+                    stop_violations += 1
+                current_run += 1
+                current_stop = 0
+            else:  # 停止中
+                if current_run > 0 and current_run < min_run_steps:
+                    run_violations += 1
+                current_stop += 1
+                current_run = 0
+        
+        if run_violations > 0 or stop_violations > 0:
+            constraint_violations.append(f"- **{gen.name}**: 最小運転時間違反 {run_violations}回, 最小停止時間違反 {stop_violations}回")
+    
+    if constraint_violations:
+        report.append("### 制約違反")
+        report.extend(constraint_violations)
+    else:
+        report.append("### 制約遵守状況")
+        report.append("- ✅ すべての発電機で最小運転・停止時間制約が遵守されています")
+    
+    report.append("")
+    
+    # 6. 予備力分析
+    report.append("## 🔋 予備力分析")
+    
+    reserve_margins = []
+    for t in range(96):
+        available_capacity = 0
+        for i, gen in enumerate(generators):
+            if output_flags[i, t] == 1:  # 運転中
+                available_capacity += gen.max_output
+        
+        reserve = available_capacity - demand_data[t]
+        reserve_rate = (reserve / demand_data[t]) * 100 if demand_data[t] > 0 else 0
+        reserve_margins.append((reserve, reserve_rate))
+    
+    reserves = [r[0] for r in reserve_margins]
+    reserve_rates = [r[1] for r in reserve_margins]
+    
+    min_reserve = min(reserves)
+    max_reserve = max(reserves)
+    avg_reserve = np.mean(reserves)
+    min_reserve_rate = min(reserve_rates)
+    avg_reserve_rate = np.mean(reserve_rates)
+    
+    report.append(f"- **最小予備力**: {min_reserve:.0f} kW ({min_reserve_rate:.1f}%)")
+    report.append(f"- **最大予備力**: {max_reserve:.0f} kW")
+    report.append(f"- **平均予備力**: {avg_reserve:.0f} kW ({avg_reserve_rate:.1f}%)")
+    
+    # 予備力不足の警告
+    if min_reserve < 1000:
+        report.append("- ⚠️ **警告**: 予備力が1,000kWを下回る時間帯があります")
+    
+    report.append("")
+    
+    # 7. 改善提案
+    report.append("## 💡 改善提案")
+    
+    suggestions = []
+    
+    # 稼働率の低い発電機
+    low_utilization_gens = []
+    for i, gen in enumerate(generators):
+        running_steps = np.sum(output_flags[i, :] == 1)
+        utilization = (running_steps / 96) * 100
+        if utilization < 20 and not gen.is_must_run:
+            low_utilization_gens.append((gen.name, utilization))
+    
+    if low_utilization_gens:
+        suggestions.append("### 稼働率改善")
+        for name, util in low_utilization_gens:
+            suggestions.append(f"- **{name}**: 稼働率{util:.1f}%と低く、優先順位の見直しを検討")
+    
+    # コスト効率の改善
+    if ed_result and cost_efficiency:
+        highest_cost_gen = cost_efficiency[-1]  # 最もコストが高い
+        lowest_cost_gen = cost_efficiency[0]   # 最もコストが低い
+        
+        if len(cost_efficiency) > 1:
+            suggestions.append("### コスト効率改善")
+            suggestions.append(f"- **{highest_cost_gen[0]}**: 発電コスト{highest_cost_gen[1]:.2f}円/kWh と高く、運用見直しを検討")
+            suggestions.append(f"- **{lowest_cost_gen[0]}**: 発電コスト{lowest_cost_gen[1]:.2f}円/kWh と効率的、優先的活用を推奨")
+    
+    # 予備力の改善
+    if min_reserve_rate < 10:
+        suggestions.append("### 予備力改善")
+        suggestions.append(f"- 最小予備力率{min_reserve_rate:.1f}%と低く、信頼性向上のため追加容量確保を検討")
+    
+    if suggestions:
+        report.extend(suggestions)
+    else:
+        report.append("- ✅ 現在の運用計画は効率的で、大きな改善点は見つかりませんでした")
+    
+    report.append("")
+    report.append("---")
+    report.append("*このレポートは発電機構成計算ツールにより自動生成されました*")
+    
+    return "\n".join(report)
+
+def create_summary_metrics(uc_result: Dict, ed_result: Dict = None) -> Dict:
+    """サマリーメトリクスを作成"""
+    if not uc_result:
+        return {}
+    
+    generators = uc_result['generators']
+    output_flags = uc_result['output_flags']
+    demand_data = uc_result['demand_data']
+    
+    metrics = {}
+    
+    # 基本統計
+    valid_demands = demand_data[~np.isnan(demand_data)]
+    metrics['demand_min'] = valid_demands.min()
+    metrics['demand_max'] = valid_demands.max()
+    metrics['demand_avg'] = valid_demands.mean()
+    metrics['total_capacity'] = sum(gen.max_output for gen in generators)
+    metrics['peak_utilization'] = (metrics['demand_max'] / metrics['total_capacity']) * 100
+    
+    # 運転統計
+    total_running_hours = 0
+    total_starts = 0
+    
+    for i, gen in enumerate(generators):
+        running_steps = np.sum(output_flags[i, :] == 1)
+        running_hours = running_steps * 0.25
+        total_running_hours += running_hours
+        
+        # 起動回数
+        start_count = 0
+        for j in range(1, 96):
+            if output_flags[i, j] == 2 and output_flags[i, j-1] == 0:
+                start_count += 1
+        total_starts += start_count
+    
+    metrics['total_running_hours'] = total_running_hours
+    metrics['total_starts'] = total_starts
+    metrics['avg_running_hours_per_unit'] = total_running_hours / len(generators)
+    
+    # 経済指標
+    if ed_result:
+        metrics['total_cost'] = ed_result['total_costs']['total_cost']
+        metrics['avg_cost_per_hour'] = ed_result['total_costs']['average_cost_per_hour']
+        
+        total_generation = np.sum(ed_result['power_outputs']) * 0.25
+        metrics['total_generation'] = total_generation
+        metrics['avg_cost_per_kwh'] = metrics['total_cost'] / total_generation if total_generation > 0 else 0
+        
+        # λ値統計
+        lambda_values = ed_result['lambda_values']
+        metrics['lambda_min'] = lambda_values.min()
+        metrics['lambda_max'] = lambda_values.max()
+        metrics['lambda_avg'] = lambda_values.mean()
+        metrics['lambda_std'] = lambda_values.std()
+    
+    return metrics
     """デフォルト発電機設定を取得"""
     defaults = {
         0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
@@ -1118,6 +1495,9 @@ def main():
         # 結果をCSV形式で準備
         time_labels = [f"{(i*15)//60:02d}:{(i*15)%60:02d}" for i in range(96)]
         
+        # ダウンロードボタンのレイアウト
+        download_col1, download_col2, download_col3 = st.columns(3)
+        
         if 'ed_result' in st.session_state and st.session_state.ed_result:
             # 経済配分結果を含むCSV
             ed_result = st.session_state.ed_result
@@ -1143,13 +1523,13 @@ def main():
             csv_buffer = io.StringIO()
             result_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
             
-            col1, col2 = st.columns(2)
-            with col1:
+            with download_col1:
                 st.download_button(
-                    label="📥 経済配分結果をCSVダウンロード",
+                    label="📥 経済配分結果CSV",
                     data=csv_buffer.getvalue(),
                     file_name="economic_dispatch_result.csv",
-                    mime="text/csv"
+                    mime="text/csv",
+                    use_container_width=True
                 )
             
             # λ値のみのダウンロード
@@ -1161,12 +1541,24 @@ def main():
             lambda_buffer = io.StringIO()
             lambda_df.to_csv(lambda_buffer, index=False, encoding='utf-8-sig')
             
-            with col2:
+            with download_col2:
                 st.download_button(
-                    label="📊 λ値データをCSVダウンロード",
+                    label="📊 λ値データCSV",
                     data=lambda_buffer.getvalue(),
                     file_name="lambda_values.csv",
-                    mime="text/csv"
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            # 詳細レポート
+            with download_col3:
+                detailed_report = generate_detailed_report(uc_result, ed_result)
+                st.download_button(
+                    label="📋 詳細レポート",
+                    data=detailed_report,
+                    file_name="detailed_report.md",
+                    mime="text/markdown",
+                    use_container_width=True
                 )
         else:
             # 構成計算結果のみ
@@ -1177,12 +1569,112 @@ def main():
             csv_buffer = io.StringIO()
             output_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
             
-            st.download_button(
-                label="📥 構成計算結果をCSVダウンロード",
-                data=csv_buffer.getvalue(),
-                file_name="unit_commitment_result.csv",
-                mime="text/csv"
-            )
+            with download_col1:
+                st.download_button(
+                    label="📥 構成計算結果CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name="unit_commitment_result.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            # 詳細レポート（構成計算のみ）
+            with download_col2:
+                detailed_report = generate_detailed_report(uc_result)
+                st.download_button(
+                    label="📋 詳細レポート",
+                    data=detailed_report,
+                    file_name="detailed_report.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+        
+        # レポートプレビュー機能
+        st.subheader("📄 レポートプレビュー")
+        
+        if st.button("🔍 詳細レポートをプレビュー", use_container_width=True):
+            with st.spinner("レポート生成中..."):
+                if 'ed_result' in st.session_state and st.session_state.ed_result:
+                    report_content = generate_detailed_report(uc_result, st.session_state.ed_result)
+                else:
+                    report_content = generate_detailed_report(uc_result)
+                
+                # レポートを表示
+                st.markdown(report_content)
+        
+        # サマリーメトリクス表示
+        st.subheader("📊 サマリーメトリクス")
+        
+        if 'ed_result' in st.session_state and st.session_state.ed_result:
+            metrics = create_summary_metrics(uc_result, st.session_state.ed_result)
+        else:
+            metrics = create_summary_metrics(uc_result)
+        
+        if metrics:
+            # KPIカード表示
+            kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+            
+            with kpi_col1:
+                st.metric(
+                    label="需要ピーク", 
+                    value=f"{metrics['demand_max']:.0f} kW",
+                    delta=f"平均から +{metrics['demand_max'] - metrics['demand_avg']:.0f} kW"
+                )
+                st.metric(
+                    label="総発電容量", 
+                    value=f"{metrics['total_capacity']:.0f} kW"
+                )
+            
+            with kpi_col2:
+                st.metric(
+                    label="容量利用率", 
+                    value=f"{metrics['peak_utilization']:.1f}%"
+                )
+                st.metric(
+                    label="総起動回数", 
+                    value=f"{metrics['total_starts']} 回"
+                )
+            
+            with kpi_col3:
+                if 'total_cost' in metrics:
+                    st.metric(
+                        label="総燃料費", 
+                        value=f"{metrics['total_cost']:,.0f} 円"
+                    )
+                    st.metric(
+                        label="発電コスト", 
+                        value=f"{metrics['avg_cost_per_kwh']:.2f} 円/kWh"
+                    )
+                else:
+                    st.metric(
+                        label="総運転時間", 
+                        value=f"{metrics['total_running_hours']:.1f} h"
+                    )
+                    st.metric(
+                        label="平均運転時間", 
+                        value=f"{metrics['avg_running_hours_per_unit']:.1f} h/台"
+                    )
+            
+            with kpi_col4:
+                if 'lambda_avg' in metrics:
+                    st.metric(
+                        label="平均λ値", 
+                        value=f"{metrics['lambda_avg']:.3f}"
+                    )
+                    st.metric(
+                        label="λ値変動幅", 
+                        value=f"{metrics['lambda_max'] - metrics['lambda_min']:.3f}"
+                    )
+                else:
+                    st.metric(
+                        label="需要変動", 
+                        value=f"{metrics['demand_max'] - metrics['demand_min']:.0f} kW"
+                    )
+                    st.metric(
+                        label="平均需要", 
+                        value=f"{metrics['demand_avg']:.0f} kW"
+                    )
+                    )
 
 if __name__ == "__main__":
     main()
