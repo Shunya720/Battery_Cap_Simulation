@@ -564,9 +564,6 @@ def show_data_upload_section():
     """データアップロードセクション"""
     st.header("1. 年間需要予測データアップロード")
     
-    tab1　= st.tabs(["CSVアップロード"])
-    
-    with tab1:
         st.subheader("年間需要予測CSVアップロード")
         uploaded_file = st.file_uploader(
             "年間需要予測CSV（35,040ステップ推奨、15分間隔）", 
@@ -622,18 +619,6 @@ def show_data_upload_section():
                 import traceback
                 st.text(traceback.format_exc())
                 
-                # 統計表示
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("最小需要", f"{st.session_state.annual_demand.min():.0f} kW")
-                with col2:
-                    st.metric("平均需要", f"{st.session_state.annual_demand.mean():.0f} kW")
-                with col3:
-                    st.metric("最大需要", f"{st.session_state.annual_demand.max():.0f} kW")
-                with col4:
-                    st.metric("需要幅", f"{st.session_state.annual_demand.max() - st.session_state.annual_demand.min():.0f} kW")
-                
-                st.rerun()
 
 
 def show_simulation_config_section():
