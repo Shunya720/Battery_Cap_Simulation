@@ -274,8 +274,8 @@ class AnnualBatteryCapacityComparator:
                 st.write(f"容量 {capacity:,}kWh の年間最適化開始 ({i+1}/{len(capacity_list)}) - SOC引き継ぎあり")
                 
                 # 容量に応じた設定（回数ベースに変更）
-                'annual_cycle_target': annual_cycle_target,      # 目標放電量(kWh)
-                'annual_discharge': actual_discharge_kwh,        # 実際の放電量(kWh)
+                'annual_cycle_target': annual_cycle_target      # 目標放電量(kWh)
+                'annual_discharge': actual_discharge_kwh       # 実際の放電量(kWh)
                 
                 # 許容範囲をkWh換算（回数 × 容量）
                 cycle_tolerance_kwh = cycle_tolerance * capacity  # 回数 → kWh換算
