@@ -989,8 +989,152 @@ def display_annual_results():
     with tab1:
         st.subheader("年間需要カーブ比較")
         
+        # グラフ表示期間選択
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            graph_period = st.selectbox(
+                "表示期間",
+                ["1週間", "1ヶ月", "3ヶ月", "全年間（サンプル）"],
+                index=0,
+                key="graph_period_select"
+            )
+        
+        with col2:
+            if graph_period in ["1週間", "1ヶ月", "3ヶ月"]:
+                start_month = st.selectbox(
+                    "開始月",
+                    list(range(1, 13)),
+                    index=0,
+                    format_func=lambda x: f"{x}月",
+                    key="start_month_select"
+                )
+            else:
+                start_month = 1
+        
+        with col3:
+            selected_capacity_graph = st.selectbox(
+                "表示する容量",
+                capacity_list,
+                index=0,
+                format_func=lambda x: f"{x:,}kWh",
+                key="selected_capacity_graph"
+            )
+        
+        # データ期間とサンプリング設定
+        if graph_period == "1週間":
+            # 指定月の第1週
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_idx = start_idx + (7 * 96)  # 1週間分
+            period_title = f"{start_month}月第1週"
+        elif graph_period == "1ヶ月":
+            # 指定月全体
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_idx = start_idx + (days_per_month[start_month-1] * 96)
+            period_title = f"{start_month}月"
+        elif graph_period == "3ヶ月":
+            # 指定月から3ヶ月
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            start_idx = sum(days_per_month[:start_month-1]) * 96
+            end_month = min(start_month + 2, 12)
+            end_idx = sum(days_per_month[:end_month]) * 96
+            period_title = f"{start_month}月〜{end_month}月"
+        else:
+            # 全年間（サンプル表示）
+            start_idx = 0
+            end_idx = len(annual_demand)
+            # サンプリング（表示負荷軽減のため）
+            sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
+            sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
+            period_title = "全年間（サンプル表示）"
+        
+        # データ抽出
+        if graph_period != "全年間（サンプル）":
+            # 指定期間のデータを抽出
+            end_idx = min(end_idx, len(annual_demand))
+            period_demand = annual_demand[start_idx:end_idx]
+            
+            if selected_capacity_graph in results:
+                period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
+            else:
+                period_controlled = period_demand  # フォールバック
+            
+            # 時系列作成
+            time_series = create_annual_time_series()
+            period_times = time_series[start_idx:end_idx]
+        else:
+            # 全年間サンプル表示
+            period_demand = annual_demand[sample_indices]
+            
+            if selected_capacity_graph in results:
+                period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
+            else:
+                period_controlled = period_demand
+            
+            time_series = create_annual_time_series()
+            period_times = [time_series[i] for i in sample_indices]
+        
+        # 需要比較グラフ
+        fig_demand = go.Figure()
+        
+        # 元需要予測
+        fig_demand.add_trace(go.Scatter(
+            x=period_times,
+            y=period_demand,
+            name="元需要予測",
+            line=dict(color="lightblue", width=2),
+            opacity=0.8
+        ))
+        
+        # 電池制御後需要
+        fig_demand.add_trace(go.Scatter(
+            x=period_times,
+            y=period_controlled,
+            name=f"電池制御後（{selected_capacity_graph:,}kWh）",
+            line=dict(color="red", width=2)
+        ))
+        
+        fig_demand.update_layout(
+            title=f"需要カーブ比較 - {period_title}",
+            xaxis_title="日時",
+            yaxis_title="需要 (kW)",
+            height=500,
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig_demand, use_container_width=True)
+        
+        # 効果統計表示
+        if selected_capacity_graph in results:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                peak_reduction = np.max(period_demand) - np.max(period_controlled)
+                st.metric("ピーク削減", f"{peak_reduction:.1f} kW")
+            
+            with col2:
+                avg_reduction = np.mean(period_demand) - np.mean(period_controlled)
+                st.metric("平均削減", f"{avg_reduction:.1f} kW")
+            
+            with col3:
+                range_original = np.max(period_demand) - np.min(period_demand)
+                range_controlled = np.max(period_controlled) - np.min(period_controlled)
+                range_improvement = range_original - range_controlled
+                st.metric("需要幅改善", f"{range_improvement:.1f} kW")
+            
+            with col4:
+                smoothness_original = np.std(np.diff(period_demand))
+                smoothness_controlled = np.std(np.diff(period_controlled))
+                smoothness_improvement = smoothness_original - smoothness_controlled
+                st.metric("変動改善", f"{smoothness_improvement:.1f} kW")
+        
+        # 全容量比較グラフ（年間データのサンプル表示）
+        st.subheader("全容量比較（年間サンプル）")
+        
         # データサンプリング（表示用）
-        sample_size = min(len(annual_demand), 8760)  # 最大1週間分を表示
+        sample_size = min(len(annual_demand), 4320)  # 約3日分を表示
         sample_indices = np.linspace(0, len(annual_demand)-1, sample_size, dtype=int)
         
         fig_annual = go.Figure()
@@ -1020,7 +1164,7 @@ def display_annual_results():
                 ))
             
             fig_annual.update_layout(
-                title="年間需要平準化効果比較（サンプル表示）",
+                title="年間需要平準化効果比較（全容量・サンプル表示）",
                 xaxis_title="日時",
                 yaxis_title="需要 (kW)",
                 height=600,
@@ -1031,6 +1175,52 @@ def display_annual_results():
             
         except Exception as e:
             st.error(f"年間グラフ作成エラー: {e}")
+        
+        # バッテリー出力グラフ
+        st.subheader("バッテリー出力パターン")
+        
+        if selected_capacity_graph in results:
+            # 同じ期間のバッテリー出力を表示
+            if graph_period != "全年間（サンプル）":
+                battery_output = results[selected_capacity_graph]['battery_output'][start_idx:end_idx]
+                battery_times = period_times
+            else:
+                battery_output = results[selected_capacity_graph]['battery_output'][sample_indices]
+                battery_times = period_times
+            
+            fig_battery = go.Figure()
+            
+            # 充電（正の値）と放電（負の値）を色分け
+            charging = np.where(battery_output >= 0, battery_output, 0)
+            discharging = np.where(battery_output < 0, battery_output, 0)
+            
+            fig_battery.add_trace(go.Scatter(
+                x=battery_times,
+                y=charging,
+                name="充電",
+                fill='tozeroy',
+                line=dict(color="blue"),
+                opacity=0.7
+            ))
+            
+            fig_battery.add_trace(go.Scatter(
+                x=battery_times,
+                y=discharging,
+                name="放電",
+                fill='tozeroy',
+                line=dict(color="orange"),
+                opacity=0.7
+            ))
+            
+            fig_battery.update_layout(
+                title=f"バッテリー出力パターン - {period_title} (容量{selected_capacity_graph:,}kWh)",
+                xaxis_title="日時",
+                yaxis_title="出力 (kW)",
+                height=400,
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
+            
+            st.plotly_chart(fig_battery, use_container_width=True)
         
         # 年間統計
         col1, col2, col3, col4 = st.columns(4)
