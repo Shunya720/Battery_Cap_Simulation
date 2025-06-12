@@ -62,10 +62,6 @@ class BatteryCapacityComparator:
                 # 容量に応じた最大出力設定
                 if power_scaling_method == 'capacity_ratio':
                     max_power = capacity / 16
-                elif power_scaling_method == 'custom':
-                    max_power = capacity / 20
-                elif power_scaling_method == 'fixed':  # 修正: 'fixed'オプション追加
-                    max_power = 3000
                 elif power_scaling_method == 'manual':
                     if manual_powers and i < len(manual_powers):
                         # 個別設定がある場合
@@ -368,12 +364,10 @@ def main():
             st.subheader("最大出力スケーリング設定")
             power_scaling_method = st.selectbox(
                 "最大出力の決定方法",
-                ["capacity_ratio", "fixed", "custom", "manual"],
+                ["capacity_ratio", "manual"],
                 index=0,
                 format_func=lambda x: {
                     "capacity_ratio": "容量比例（容量÷16）",
-                    "fixed": "固定値（3000kW）", 
-                    "custom": "カスタム比率（容量÷20）",
                     "manual": "手動入力"
                 }[x],
                 help="バッテリー容量に対する最大出力の算出方法"
@@ -424,10 +418,6 @@ def main():
             def calculate_max_power(capacity, method):
                 if method == "capacity_ratio":
                     return capacity / 16
-                elif method == "fixed":
-                    return 3000
-                elif method == "custom":
-                    return capacity / 20
                 elif method == "manual":
                     return capacity / manual_scaling_ratio + manual_base_power
                 return capacity / 16
