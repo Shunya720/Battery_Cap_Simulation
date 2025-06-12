@@ -1748,7 +1748,7 @@ def show_soc_analysis(results, capacity_list):
                 y=sample_soc,
                 name=f"SOC推移（{selected_capacity_soc:,}kWh）",
                 line=dict(color="green", width=2),
-                fill='tonexty' if len(sample_soc) > 0 else None
+                fill='tozeroy' if len(sample_soc) > 0 else None
             ))
             
             # SOC限界値の表示
