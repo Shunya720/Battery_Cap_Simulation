@@ -111,15 +111,13 @@ def main():
     
     # ピーク・ボトム制御比率を分離
     st.sidebar.markdown("**⚡ 分離制御強度設定**")
-    
     col1, col2 = st.sidebar.columns(2)
-        with col1:
-            peak_power_ratio = st.slider(  # st.sidebar削除
-                "ピーク制御強度", 
-                min_value=0.1, max_value=1.0, value=default_peak_ratio, step=0.1,
-                help="ピーク時間帯での最大出力比率（放電）"
-            )
-        
+    with col1:
+        peak_power_ratio = st.slider(  # st.sidebar削除
+        "ピーク制御強度", 
+        min_value=0.1, max_value=1.0, value=default_peak_ratio, step=0.1,
+        help="ピーク時間帯での最大出力比率（放電）"
+        )
         with col2:
             bottom_power_ratio = st.slider(  # st.sidebar削除
                 "ボトム制御強度", 
