@@ -39,11 +39,16 @@ except SyntaxError as e:
 
 
 class AnnualBatteryCapacityComparator:
-    """年間バッテリー容量別シミュレーション比較クラス（SOC引き継ぎ対応）"""
+    """年間バッテリー容量別シミュレーション比較クラス（4月スタート対応・SOC引き継ぎ対応）"""
     
-    def __init__(self):
+    def __init__(self, start_month=4):
+        """
+        Args:
+            start_month (int): データの開始月（デフォルト：4月）
+        """
         self.comparison_results = {}
         self.monthly_results = {}
+        self.start_month = start_month  # 開始月を設定
         
     def validate_annual_data(self, demand_forecast):
         """年間データの検証"""
@@ -119,24 +124,42 @@ class AnnualBatteryCapacityComparator:
         return daily_batches
     
     def _get_month_from_day(self, day_of_year):
-        """年間通算日から月を取得"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        """年間通算日から月を取得（4月スタート対応）"""
+        # 4月スタートの場合の月順序: 4,5,6,7,8,9,10,11,12,1,2,3
+        month_order = []
+        for i in range(12):
+            month = ((self.start_month - 1 + i) % 12) + 1
+            month_order.append(month)
+        
+        # 各月の日数（平年ベース）
+        days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                        7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+        
         cumulative_days = 0
-        for month, days in enumerate(days_per_month):
+        for i, month in enumerate(month_order):
+            days = days_in_month[month]
+            if day_of_year < cumulative_days + days:
+                return month
             cumulative_days += days
-            if day_of_year < cumulative_days:
-                return month + 1
-        return 12
-    
+        return month_order[-1]  # 年末の場合は最後の月
+
     def _get_day_in_month(self, day_of_year):
-        """年間通算日から月内日付を取得"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        """年間通算日から月内日付を取得（4月スタート対応）"""
+        month_order = []
+        for i in range(12):
+            month = ((self.start_month - 1 + i) % 12) + 1
+            month_order.append(month)
+        
+        days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                        7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+        
         cumulative_days = 0
-        for month, days in enumerate(days_per_month):
+        for month in month_order:
+            days = days_in_month[month]
             if day_of_year < cumulative_days + days:
                 return day_of_year - cumulative_days + 1
             cumulative_days += days
-        return 31
+        return days_in_month[month_order[-1]]
     
     def run_daily_simulation_with_soc(self, daily_data, capacity, max_power, 
                                     daily_cycle_target, cycle_tolerance, optimization_trials,
@@ -401,12 +424,13 @@ class AnnualBatteryCapacityComparator:
         return self.comparison_results
     
     def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_summary):
-        """季節別統計計算（月別サマリーから算出）"""
+        """季節別統計計算（4月スタート対応）"""
+        # 4月スタートでの季節定義
         seasons = {
-            'spring': [3, 4, 5],    # 春
-            'summer': [6, 7, 8],    # 夏  
-            'autumn': [9, 10, 11],  # 秋
-            'winter': [12, 1, 2]    # 冬
+            'spring': [4, 5, 6],    # 春：4-6月
+            'summer': [7, 8, 9],    # 夏：7-9月  
+            'autumn': [10, 11, 12], # 秋：10-12月
+            'winter': [1, 2, 3]     # 冬：1-3月（翌年）
         }
         
         seasonal_stats = {}
@@ -416,11 +440,20 @@ class AnnualBatteryCapacityComparator:
             seasonal_controlled = []
             seasonal_discharge = 0
             
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            # 4月スタートでの月順序を考慮
+            month_order = []
+            for i in range(12):
+                month = ((self.start_month - 1 + i) % 12) + 1
+                month_order.append(month)
+            
+            days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                           7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
             
             start_idx = 0
-            for month in range(1, 13):
-                end_idx = start_idx + (days_per_month[month-1] * 96)
+            for order_idx, month in enumerate(month_order):
+                days = days_in_month[month]
+                end_idx = start_idx + (days * 96)
+                
                 if month in months and month in monthly_summary:
                     if end_idx <= len(original_demand) and end_idx <= len(controlled_demand):
                         seasonal_original.extend(original_demand[start_idx:end_idx])
@@ -484,10 +517,15 @@ class AnnualBatteryCapacityComparator:
         return pd.DataFrame(summary)
 
 
-def create_annual_time_series(start_date=None):
-    """年間時系列作成"""
+def create_annual_time_series(start_date=None, start_month=4):
+    """年間時系列作成（4月スタート対応）"""
     if start_date is None:
-        start_date = datetime(2024, 1, 1, 0, 0, 0)
+        # 4月スタートの場合、前年の4月1日から開始
+        current_year = datetime.now().year
+        if start_month <= 3:  # 1-3月の場合は同年
+            start_date = datetime(current_year, start_month, 1, 0, 0, 0)
+        else:  # 4-12月の場合は前年
+            start_date = datetime(current_year - 1, start_month, 1, 0, 0, 0)
     
     time_series = []
     current_time = start_date
@@ -498,7 +536,33 @@ def create_annual_time_series(start_date=None):
     
     return time_series
 
-
+def get_month_info_for_start_month(start_month=4):
+    """開始月に基づく月情報を取得"""
+    month_names = []
+    month_numbers = []
+    
+    for i in range(12):
+        month_num = ((start_month - 1 + i) % 12) + 1
+        month_names.append(f"{month_num}月")
+        month_numbers.append(month_num)
+    
+    # 各月の日数
+    days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                    7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+    
+    # 累積日数計算
+    cumulative_days = [0]
+    for i in range(12):
+        month_num = month_numbers[i]
+        cumulative_days.append(cumulative_days[-1] + days_in_month[month_num])
+    
+    return {
+        'month_names': month_names,
+        'month_numbers': month_numbers,
+        'days_in_month': days_in_month,
+        'cumulative_days': cumulative_days
+    }
+    
 # セッション状態の初期化
 def initialize_session_state():
     """セッション状態の初期化"""
@@ -561,8 +625,33 @@ def main():
 
 
 def show_data_upload_section():
-    """データアップロードセクション"""
+    """データアップロードセクション（4月スタート対応）"""
     st.header("1. 年間需要予測データアップロード")
+    
+    # 開始月設定の追加
+    col1, col2 = st.columns(2)
+    with col1:
+        start_month = st.selectbox(
+            "データ開始月",
+            list(range(1, 13)),
+            index=3,  # デフォルト4月
+            format_func=lambda x: f"{x}月",
+            help="需要データの開始月を選択してください",
+            key="data_start_month_select"
+        )
+        # セッション状態に保存
+        st.session_state.data_start_month = start_month
+    
+    with col2:
+        st.info(f"""
+        **選択中: {start_month}月スタート**
+        
+        季節区分:
+        - 春: {start_month}月〜{(start_month+2-1)%12+1}月
+        - 夏: {(start_month+3-1)%12+1}月〜{(start_month+5-1)%12+1}月
+        - 秋: {(start_month+6-1)%12+1}月〜{(start_month+8-1)%12+1}月
+        - 冬: {(start_month+9-1)%12+1}月〜{(start_month+11-1)%12+1}月
+        """)
     
     st.subheader("年間需要予測CSVアップロード")
     uploaded_file = st.file_uploader(
@@ -1052,11 +1141,20 @@ def display_annual_results():
 
 
 def show_annual_demand_comparison(results, capacity_list, annual_demand):
-    """年間需要比較タブの内容（SOC引き継ぎ対応）"""
-    st.subheader("年間需要カーブ比較")
+    """年間需要比較タブの内容（4月スタート対応）"""
     
-    # === 変更1: グラフ表示期間選択部分 ===
-    col1, col2, col3, col4 = st.columns(4)  # 3列から4列に変更
+    # 開始月を取得（セッション状態から）
+    start_month = getattr(st.session_state, 'data_start_month', 4)
+    
+    # 4月スタートに対応した月名配列の作成
+    month_names = []
+    month_numbers = []
+    for i in range(12):
+        month_num = ((start_month - 1 + i) % 12) + 1
+        month_names.append(f"{month_num}月")
+        month_numbers.append(month_num)
+    
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         graph_period = st.selectbox(
             "表示期間",
@@ -1067,15 +1165,18 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
     
     with col2:
         if graph_period in ["1週間", "1ヶ月", "3ヶ月"]:
-            start_month = st.selectbox(
-                "開始月",
-                list(range(1, 13)),
+            # 開始月基準での月選択
+            display_month_idx = st.selectbox(
+                "表示する月（データ基準）",
+                list(range(12)),
                 index=0,
-                format_func=lambda x: f"{x}月",
+                format_func=lambda x: month_names[x],
                 key="start_month_select"
             )
+            # 実際の月番号に変換
+            actual_month = ((start_month - 1 + display_month_idx) % 12) + 1
         else:
-            start_month = 1
+            actual_month = start_month
     
     with col3:
         selected_capacity_graph = st.selectbox(
@@ -1097,65 +1198,157 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
 
     
     # データ期間とサンプリング設定
+    # データ期間とサンプリング設定（4月スタート対応）
     try:
+        # 4月スタート基準での各月の累積日数計算
+        def get_cumulative_days_from_start(target_month_index):
+            """開始月からの累積日数を計算"""
+            days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                           7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+            
+            cumulative_days = 0
+            for i in range(target_month_index):
+                month_num = month_numbers[i]
+                cumulative_days += days_in_month[month_num]
+            
+            return cumulative_days
+        
+        def get_days_in_target_month(target_month_index):
+            """指定月の日数を取得"""
+            days_in_month = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+                           7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+            month_num = month_numbers[target_month_index]
+            return days_in_month[month_num]
+        
         if graph_period == "1週間":
-            # 指定月の第1週
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
+            # 指定月の第1週（4月スタート基準）
+            cumulative_days = get_cumulative_days_from_start(display_month_idx)
+            start_idx = cumulative_days * 96
             end_idx = start_idx + (7 * 96)  # 1週間分
-            period_title = f"{start_month}月第1週"
+            period_title = f"{month_names[display_month_idx]}第1週"
+            
+            # デバッグ情報
+            st.info(f"1週間表示: {month_names[display_month_idx]} (月番号: {month_numbers[display_month_idx]})")
+            st.info(f"開始日: データ開始から{cumulative_days}日目, インデックス: {start_idx}")
+            
         elif graph_period == "1ヶ月":
-            # 指定月全体
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
-            end_idx = start_idx + (days_per_month[start_month-1] * 96)
-            period_title = f"{start_month}月"
+            # 指定月全体（4月スタート基準）
+            cumulative_days = get_cumulative_days_from_start(display_month_idx)
+            start_idx = cumulative_days * 96
+            
+            # 該当月の実際の日数を使用
+            month_days = get_days_in_target_month(display_month_idx)
+            end_idx = start_idx + (month_days * 96)
+            period_title = f"{month_names[display_month_idx]}全体"
+            
+            # デバッグ情報
+            st.info(f"1ヶ月表示: {month_names[display_month_idx]} (月番号: {month_numbers[display_month_idx]})")
+            st.info(f"開始日: データ開始から{cumulative_days}日目, 日数: {month_days}日")
+            st.info(f"インデックス範囲: {start_idx} - {end_idx}")
+            
         elif graph_period == "3ヶ月":
-            # 指定月から3ヶ月
-            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-            start_idx = sum(days_per_month[:start_month-1]) * 96
-            end_month = min(start_month + 2, 12)
-            end_idx = sum(days_per_month[:end_month]) * 96
-            period_title = f"{start_month}月〜{end_month}月"
-        else:
-            # 全年間（サンプル表示）
+            # 指定月から3ヶ月（4月スタート基準）
+            start_cumulative_days = get_cumulative_days_from_start(display_month_idx)
+            start_idx = start_cumulative_days * 96
+            
+            # 3ヶ月分の日数を計算
+            total_days = 0
+            end_month_idx = min(display_month_idx + 3, 12)  # 年度内に限定
+            for i in range(display_month_idx, end_month_idx):
+                total_days += get_days_in_target_month(i)
+            
+            end_idx = start_idx + (total_days * 96)
+            
+            start_month_name = month_names[display_month_idx]
+            end_month_name = month_names[end_month_idx - 1] if end_month_idx > display_month_idx else start_month_name
+            period_title = f"{start_month_name}〜{end_month_name}"
+            
+            # デバッグ情報
+            st.info(f"3ヶ月表示: {start_month_name}〜{end_month_name}")
+            st.info(f"合計日数: {total_days}日, インデックス範囲: {start_idx} - {end_idx}")
+            
+        else:  # 全年間（サンプル）
             start_idx = 0
             end_idx = len(annual_demand)
             # サンプリング（表示負荷軽減のため）
             sample_size = min(8760, end_idx - start_idx)  # 最大1週間分相当
             sample_indices = np.linspace(start_idx, end_idx-1, sample_size, dtype=int)
-            period_title = "全年間（サンプル表示）"
+            period_title = f"全年間（{start_month}月スタート・サンプル表示）"
         
-        # データ抽出
+        # データ抽出（境界チェック強化）
         if graph_period != "全年間（サンプル）":
-            # 指定期間のデータを抽出
+            # 指定期間のデータを抽出（境界チェック）
             end_idx = min(end_idx, len(annual_demand))
+            start_idx = max(0, min(start_idx, len(annual_demand) - 1))
+            
+            if start_idx >= end_idx:
+                st.warning(f"データ範囲エラー: 開始位置({start_idx}) >= 終了位置({end_idx})")
+                st.warning(f"利用可能データ長: {len(annual_demand)}ステップ")
+                return
+            
             period_demand = annual_demand[start_idx:end_idx]
             
             if selected_capacity_graph in results:
-                period_controlled = results[selected_capacity_graph]['demand_after_control'][start_idx:end_idx]
-                period_soc = results[selected_capacity_graph]['soc_profile'][start_idx:end_idx]  # SOC追加
+                controlled_data = results[selected_capacity_graph]['demand_after_control']
+                if len(controlled_data) > end_idx:
+                    period_controlled = controlled_data[start_idx:end_idx]
+                    period_soc = results[selected_capacity_graph]['soc_profile'][start_idx:end_idx]
+                else:
+                    st.warning(f"制御後データが不足: 要求{end_idx}, 利用可能{len(controlled_data)}")
+                    period_controlled = period_demand  # フォールバック
+                    period_soc = np.full(len(period_demand), 50)
             else:
-                period_controlled = period_demand  # フォールバック
-                period_soc = np.full(len(period_demand), 50)  # デフォルトSOC
+                period_controlled = period_demand
+                period_soc = np.full(len(period_demand), 50)
             
-            # 時系列作成
-            time_series = create_annual_time_series()
-            period_times = time_series[start_idx:end_idx]
+            # 時系列作成（4月スタート対応）
+            time_series = create_annual_time_series(start_month=start_month)
+            if len(time_series) > end_idx:
+                period_times = time_series[start_idx:end_idx]
+            else:
+                st.warning(f"時系列データが不足: 要求{end_idx}, 利用可能{len(time_series)}")
+                # フォールバック: 簡易時系列生成
+                period_times = []
+                base_time = datetime(2024, start_month, 1, 0, 0, 0)
+                for i in range(len(period_demand)):
+                    period_times.append(base_time + timedelta(minutes=15*i))
+        
         else:
-            # 全年間サンプル表示
+            # 全年間サンプル表示（4月スタート対応）
             period_demand = annual_demand[sample_indices]
     
             if selected_capacity_graph in results:
-                period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
-                period_soc = results[selected_capacity_graph]['soc_profile'][sample_indices]
+                controlled_data = results[selected_capacity_graph]['demand_after_control']
+                soc_data = results[selected_capacity_graph]['soc_profile']
+                
+                # サンプルインデックスが範囲内かチェック
+                valid_indices = sample_indices[sample_indices < len(controlled_data)]
+                if len(valid_indices) < len(sample_indices):
+                    st.warning(f"一部データが範囲外です。{len(valid_indices)}/{len(sample_indices)}ポイントを表示します。")
+                
+                period_controlled = controlled_data[valid_indices]
+                period_soc = soc_data[valid_indices]
+                period_demand = annual_demand[valid_indices]  # 対応するよう調整
             else:
                 period_controlled = period_demand
-                period_soc = np.full(len(period_demand), 50)  # デフォルトSOC
+                period_soc = np.full(len(period_demand), 50)
             
-            time_series = create_annual_time_series()
-            period_times = [time_series[i] for i in sample_indices]
-        
+            # サンプル時系列作成（4月スタート対応）
+            time_series = create_annual_time_series(start_month=start_month)
+            valid_indices = sample_indices[sample_indices < len(time_series)]
+            period_times = [time_series[i] for i in valid_indices]
+    
+                # データ整合性チェック
+        if len(period_demand) != len(period_controlled) or len(period_demand) != len(period_times):
+            st.error(f"""
+            データ長不整合:
+            - 需要データ: {len(period_demand)}
+            - 制御後データ: {len(period_controlled)}
+            - 時系列データ: {len(period_times)}
+            - SOCデータ: {len(period_soc)}
+            """)
+            return
+            
         # 需要比較グラフ
         if show_soc:
             # サブプロット作成（需要とSOCを縦に並べる）
@@ -1413,9 +1606,27 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         st.plotly_chart(fig_annual, use_container_width=True)
 
     except Exception as e:
-        st.error(f"年間グラフ作成エラー: {e}")
+        st.error(f"データ期間設定エラー: {e}")
+        st.error(f"設定値: 開始月={start_month}, 表示月インデックス={display_month_idx}")
+        st.error(f"データ長: {len(annual_demand)}ステップ")
         import traceback
         st.text(traceback.format_exc())
+        
+        # フォールバック表示
+        st.info("エラーのため、データ先頭1週間分を表示します")
+        fallback_end = min(7 * 96, len(annual_demand))
+        period_demand = annual_demand[:fallback_end]
+        if selected_capacity_graph in results:
+            period_controlled = results[selected_capacity_graph]['demand_after_control'][:fallback_end]
+            period_soc = results[selected_capacity_graph]['soc_profile'][:fallback_end]
+        else:
+            period_controlled = period_demand
+            period_soc = np.full(len(period_demand), 50)
+        
+        # フォールバック時系列
+        time_series = create_annual_time_series(start_month=start_month)
+        period_times = time_series[:fallback_end]
+        period_title = f"フォールバック表示（{start_month}月スタート）"
     
     # 年間統計
     st.subheader("年間統計とSOC分析")  # タイトル変更
