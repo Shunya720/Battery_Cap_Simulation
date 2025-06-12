@@ -1031,7 +1031,7 @@ def main():
                     heat_rate_b = st.number_input(f"b係数 (1次)", value=default_config["heat_b"], 
                                                 step=0.001, format="%.4f", key=f"heat_b_{i}")
                 with col5:
-                    heat_rate_c = st.number_input(f"c係数 (定数)", value=default_config["heat_c"], 
+                    heat_rate_c = st.number_input(f"c係数 (定数)", value=float(default_config["heat_c"]), 
                                                 step=1.0, key=f"heat_c_{i}")
                 
                 # 燃料単価
@@ -1211,8 +1211,8 @@ def main():
             st.subheader("📝 計算プロセス詳細")
             
             # 時間範囲選択
-            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0)
-            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23)
+            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0, step=1)
+            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23, step=1)
             
             debug_info = uc_result.get('debug_info', [])
             
