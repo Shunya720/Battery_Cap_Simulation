@@ -1083,8 +1083,8 @@ def display_annual_results():
         show_capacity_recommendation(results, capacity_list)
     
     # ダウンロードセクション
-    show_download_section(summary_df, results, annual_comparator)
-    def show_annual_demand_comparison(results, capacity_list, annual_demand):
+        show_download_section(summary_df, results, annual_comparator)
+        def show_annual_demand_comparison(results, capacity_list, annual_demand):
         
     """年間需要比較タブの内容"""
     st.subheader("年間需要カーブ比較")
