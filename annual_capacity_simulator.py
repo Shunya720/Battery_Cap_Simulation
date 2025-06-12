@@ -2005,7 +2005,7 @@ def show_capacity_recommendation(results, capacity_list):
             ]
             seasonal_balance_score = -np.std(seasonal_values) * 0.1
             
-            total_score = peak_score + efficiency_score + cycle_score * 0.2 + soc_stability_score + seasonal_balance_score
+            total_score = peak_score + efficiency_score + cycle_score * 0.2 + seasonal_balance_score
             
             evaluation_results.append({
                 '容量(kWh)': f"{capacity:,}",
