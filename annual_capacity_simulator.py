@@ -883,17 +883,17 @@ def show_simulation_config_section():
     # 処理方式設定
     st.subheader("処理設定")
     
-        estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * 0.3
-        st.info(f"""
-        **予想処理時間（SOC引き継ぎ・逐次処理）:**
-        - 容量数: {len(capacity_list)}
-        - 日数: 365日
-        - 処理方式: 逐次（SOC引き継ぎのため）
+    estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * 0.3
+    st.info(f"""
+    **予想処理時間（SOC引き継ぎ・逐次処理）:**
+    - 容量数: {len(capacity_list)}
+    - 日数: 365日
+    - 処理方式: 逐次（SOC引き継ぎのため）
         
-        約 {estimated_time/60:.1f}分 〜 {estimated_time/20:.1f}分
+    約 {estimated_time/60:.1f}分 〜 {estimated_time/20:.1f}分
         
-        ※SOC引き継ぎにより正確な年間運用をシミュレーション
-        """)
+    ※SOC引き継ぎにより正確な年間運用をシミュレーション
+    """)
     
     # SOC引き継ぎ処理の説明
     with st.expander("🔋 SOC引き継ぎ処理について", expanded=False):
