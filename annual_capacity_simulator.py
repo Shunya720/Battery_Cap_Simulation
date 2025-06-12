@@ -18,6 +18,7 @@ def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_
             
             start_idx = 0
             for month in range(1, 13):
+                }
             else:
                 seasonal_stats[season_name] = {
                     'peak_reduction': 0,
@@ -25,7 +26,27 @@ def _calculate_seasonal_stats(self, original_demand, controlled_demand, monthly_
                     'total_discharge': 0
                 }
         
-        return seasonal_statsend_idx = start_idx + (days_per_month[month-1] * 96)
+        return seasonal_stats
+    
+    def _get_month_from_day_simple(self, day_of_year):
+        """年間通算日から月を取得（簡易版）"""
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            cumulative_days += days
+            if day_of_year < cumulative_days:
+                return month + 1
+        return 12
+    
+    def _get_day_in_month_simple(self, day_of_year):
+        """年間通算日から月内日付を取得（簡易版）"""
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        cumulative_days = 0
+        for month, days in enumerate(days_per_month):
+            if day_of_year < cumulative_days + days:
+                return day_of_year - cumulative_days + 1
+            cumulative_days += days
+        return 31end_idx = start_idx + (days_per_month[month-1] * 96)
                 if month in months and month in monthly_summary:
                     if end_idx <= len(original_demand):
                         seasonal_original.extend(original_demand[start_idx:end_idx])
@@ -1540,11 +1561,11 @@ def display_annual_results():
                 month_daily_data = []
                 for day, result in daily_results.items():
                     # 日から月を計算（簡易版）
-                    day_month = self._get_month_from_day_simple(day - 1)
+                    day_month = annual_comparator._get_month_from_day_simple(day - 1)
                     if day_month == selected_month:
                         month_daily_data.append({
                             '日': day,
-                            '日付': f"{selected_month}月{self._get_day_in_month_simple(day - 1)}日",
+                            '日付': f"{selected_month}月{annual_comparator._get_day_in_month_simple(day - 1)}日",
                             'ピーク削減(kW)': f"{result['peak_reduction']:.1f}",
                             '日別放電(kWh)': f"{result['daily_discharge']:.0f}",
                             '需要幅改善(kW)': f"{result['range_improvement']:.1f}"
@@ -1564,26 +1585,6 @@ def display_annual_results():
                     st.plotly_chart(fig_daily, use_container_width=True)
                 else:
                     st.info(f"{selected_month}月のデータがありません")
-    
-    def _get_month_from_day_simple(self, day_of_year):
-        """年間通算日から月を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            cumulative_days += days
-            if day_of_year < cumulative_days:
-                return month + 1
-        return 12
-    
-    def _get_day_in_month_simple(self, day_of_year):
-        """年間通算日から月内日付を取得（簡易版）"""
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        cumulative_days = 0
-        for month, days in enumerate(days_per_month):
-            if day_of_year < cumulative_days + days:
-                return day_of_year - cumulative_days + 1
-            cumulative_days += days
-        return 31
     
     with tab4:
         st.subheader("🏆 推奨容量判定")
@@ -1702,36 +1703,50 @@ def display_annual_results():
                 st.error(f"サマリーCSV生成エラー: {e}")
     
     with col2:
-        if st.button("📅 月別詳細CSV", use_container_width=True, key="download_monthly_detail_btn"):
+        if st.button("📅 日別・月別詳細CSV", use_container_width=True, key="download_monthly_detail_btn"):
             try:
-                monthly_detail_data = []
+                detail_data = []
                 
                 for capacity, result in results.items():
-                    if 'monthly_results' in result:
-                        for month, monthly_result in result['monthly_results'].items():
-                            monthly_detail_data.append({
+                    # 月別サマリー
+                    if 'monthly_summary' in result:
+                        for month, monthly_result in result['monthly_summary'].items():
+                            detail_data.append({
                                 '容量(kWh)': capacity,
-                                '月': month,
+                                '分析レベル': '月別',
+                                '期間': f"{month}月",
                                 'ピーク削減(kW)': monthly_result['peak_reduction'],
-                                '需要幅改善(kW)': monthly_result['range_improvement'],
-                                '月間放電(kWh)': monthly_result['monthly_discharge'],
-                                'ピーク制御比率': monthly_result['optimized_params'].get('peak_power_ratio', 1.0),
-                                'ボトム制御比率': monthly_result['optimized_params'].get('bottom_power_ratio', 1.0)
+                                '放電量(kWh)': monthly_result['monthly_discharge'],
+                                '処理日数': monthly_result['days_count']
+                            })
+                    
+                    # 日別詳細（サンプル：各月の最初の5日）
+                    if 'daily_results' in result:
+                        for day, daily_result in list(result['daily_results'].items())[:50]:  # 最初の50日
+                            month = annual_comparator._get_month_from_day_simple(day - 1)
+                            day_in_month = annual_comparator._get_day_in_month_simple(day - 1)
+                            detail_data.append({
+                                '容量(kWh)': capacity,
+                                '分析レベル': '日別',
+                                '期間': f"{month}月{day_in_month}日",
+                                'ピーク削減(kW)': daily_result['peak_reduction'],
+                                '放電量(kWh)': daily_result['daily_discharge'],
+                                '需要幅改善(kW)': daily_result['range_improvement']
                             })
                 
-                monthly_detail_df = pd.DataFrame(monthly_detail_data)
-                monthly_csv = monthly_detail_df.to_csv(index=False)
+                detail_df = pd.DataFrame(detail_data)
+                detail_csv = detail_df.to_csv(index=False)
                 
                 st.download_button(
-                    label="月別詳細をダウンロード",
-                    data=monthly_csv,
-                    file_name=f"annual_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    label="日別・月別詳細をダウンロード",
+                    data=detail_csv,
+                    file_name=f"annual_daily_monthly_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    key="download_monthly_detail_csv"
+                    key="download_detail_csv"
                 )
             except Exception as e:
-                st.error(f"月別詳細CSV生成エラー: {e}")
+                st.error(f"詳細CSV生成エラー: {e}")
     
     with col3:
         if st.button("🌍 季節別統計CSV", use_container_width=True, key="download_seasonal_detail_btn"):
