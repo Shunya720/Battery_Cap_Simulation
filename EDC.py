@@ -632,27 +632,21 @@ def create_economic_dispatch_chart(uc_result: Dict, ed_result: Dict) -> go.Figur
     # 色設定
     colors = px.colors.qualitative.Set3
     
-    # 1. 発電機出力の積み上げ面グラフ
-    y_stack = np.zeros(time_steps)
-    
+    # 1. 発電機出力の積み上げ棒グラフ
     for i, gen in enumerate(generators):
         y_values = power_outputs[i, :]
-        y_upper = y_stack + y_values
         
         fig.add_trace(
-            go.Scatter(
+            go.Bar(
                 x=time_labels,
-                y=y_upper,
-                fill='tonexty' if i > 0 else 'tozeroy',
-                mode='none',
+                y=y_values,
                 name=gen.name,
-                fillcolor=colors[i % len(colors)],
-                hovertemplate=f'{gen.name}: %{{y:.1f}} kW<br>時刻: %{{x}}<extra></extra>'
+                marker_color=colors[i % len(colors)],
+                hovertemplate=f'{gen.name}: %{{y:.1f}} kW<br>時刻: %{{x}}<extra></extra>',
+                opacity=0.8
             ),
             row=1, col=1
         )
-        
-        y_stack = y_upper
     
     # 需要ライン
     fig.add_trace(
@@ -712,7 +706,8 @@ def create_economic_dispatch_chart(uc_result: Dict, ed_result: Dict) -> go.Figur
     fig.update_layout(
         title='経済配分計算結果',
         height=900,
-        hovermode='x unified'
+        hovermode='x unified',
+        barmode='stack'  # 積み上げ棒グラフ設定
     )
     
     fig.update_xaxes(title_text="時刻", row=3, col=1)
