@@ -1269,10 +1269,10 @@ def show_annual_demand_comparison(results, capacity_list, annual_demand):
         else:
             # 全年間サンプル表示
             period_demand = annual_demand[sample_indices]
-            
+    
             if selected_capacity_graph in results:
                 period_controlled = results[selected_capacity_graph]['demand_after_control'][sample_indices]
-                period_soc = results[selected_capacity_graph]['soc_profile'][sample_indices]  # SOC追加
+                period_soc = results[selected_capacity_graph]['soc_profile'][sample_indices]
             else:
                 period_controlled = period_demand
                 period_soc = np.full(len(period_demand), 50)  # デフォルトSOC
