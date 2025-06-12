@@ -733,7 +733,7 @@ def show_simulation_config_section():
     st.header("2. 年間容量別シミュレーション設定（SOC引き継ぎ対応）")
     
         # 設定値の表示（回数ベース）
-        col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("年間サイクル数", f"{st.session_state.sim_annual_cycle_ratio:.0f}回")
         with col2:
