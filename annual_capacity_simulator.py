@@ -1510,7 +1510,7 @@ fig_demand.add_trace(
                         y=soc_data,
                         name=f"SOC推移（{soc_capacity:,}kWh）",
                         line=dict(color="green", width=2),
-                        fill='tonexty',
+                        fill='tozeroy',
                         fillcolor='rgba(0,255,0,0.1)'
                     ),
                     row=2, col=1
