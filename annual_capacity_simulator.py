@@ -167,7 +167,7 @@ class AnnualBatteryCapacityComparator:
             else:
                 st.info(f"{selected_month}月のデータがありません")
                 
-    日単位データの場合、年間に拡張
+    """日単位データの場合、年間に拡張"""
                 days_available = len(demand_array) // 96
                 if days_available < 7:
                     raise ValueError(f"最低7日分のデータが必要です（現在: {days_available}日分）")
