@@ -734,14 +734,14 @@ def show_simulation_config_section():
     
         # 設定値の表示（回数ベース）
     col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("年間サイクル数", f"{st.session_state.sim_annual_cycle_ratio:.0f}回")
-        with col2:
-            st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance:.0f}回")
-        with col3:
-            st.metric("初期SOC設定", f"{st.session_state.sim_initial_soc:.0f}%")
-        with col4:
-            st.metric("1日あたり", f"{st.session_state.sim_annual_cycle_ratio/365:.2f}回")
+    with col1:
+                st.metric("年間サイクル数", f"{st.session_state.sim_annual_cycle_ratio:.0f}回")
+    with col2:
+                st.metric("サイクル許容範囲", f"±{st.session_state.sim_annual_cycle_tolerance:.0f}回")
+    with col3:
+                st.metric("初期SOC設定", f"{st.session_state.sim_initial_soc:.0f}%")
+    with col4:
+                st.metric("1日あたり", f"{st.session_state.sim_annual_cycle_ratio/365:.2f}回")
     
     # データ再設定ボタン
     if st.button("📝 データを再設定", key="reset_data"):
