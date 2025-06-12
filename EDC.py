@@ -191,128 +191,6 @@ class EconomicDispatchSolver:
 
 class UnitCommitmentSolver:
     def __init__(self):
-        self.lambda_min = 0.0
-        self.lambda_max = 100.0
-        self.lambda_tolerance = 0.001  # kW
-        self.max_iterations = 50
-    
-    def calculate_output_from_lambda(self, generator: GeneratorConfig, lambda_val: float) -> float:
-        """λ値から発電機出力を計算"""
-        # λ式: P = (1000*λ - b*J) / (2*a*J)
-        if generator.heat_rate_a == 0:
-            # 2次係数が0の場合は線形
-            if generator.heat_rate_b == 0:
-                return generator.min_output
-            output = (1000 * lambda_val) / (generator.heat_rate_b * generator.heat_rate_j)
-        else:
-            output = (1000 * lambda_val - generator.heat_rate_b * generator.heat_rate_j) / \
-                    (2 * generator.heat_rate_a * generator.heat_rate_j)
-        
-        # 上下限制約
-        output = max(generator.min_output, min(generator.max_output, output))
-        return output
-    
-    def calculate_total_power(self, generators: List[GeneratorConfig], lambda_val: float, 
-                            status_flags: np.ndarray) -> float:
-        """λ値から総出力を計算"""
-        total_power = 0.0
-        
-        for i, gen in enumerate(generators):
-            status = status_flags[i]
-            
-            if status == 0 or status == 2:  # 停止中または起動中
-                output = 0.0
-            elif status == 1:  # 運転中
-                output = self.calculate_output_from_lambda(gen, lambda_val)
-            else:
-                output = 0.0
-            
-            total_power += output
-        
-        return total_power
-    
-    def find_lambda_binary_search(self, generators: List[GeneratorConfig], 
-                                 demand: float, status_flags: np.ndarray) -> float:
-        """バイナリサーチでλを探索"""
-        lambda_low = self.lambda_min
-        lambda_high = self.lambda_max
-        
-        for iteration in range(self.max_iterations):
-            lambda_mid = (lambda_low + lambda_high) / 2
-            total_power = self.calculate_total_power(generators, lambda_mid, status_flags)
-            gap = total_power - demand
-            
-            if abs(gap) <= self.lambda_tolerance:
-                return lambda_mid
-            
-            if gap > 0:
-                lambda_high = lambda_mid
-            else:
-                lambda_low = lambda_mid
-        
-        return lambda_mid
-    
-    def solve_economic_dispatch(self, generators: List[GeneratorConfig], 
-                              demand_data: np.ndarray, output_flags: np.ndarray) -> Dict:
-        """経済配分計算"""
-        time_steps = len(demand_data)
-        gen_count = len(generators)
-        
-        # λ値と出力の保存配列
-        lambda_values = np.zeros(time_steps)
-        power_outputs = np.zeros((gen_count, time_steps))
-        
-        # 各時刻での計算
-        for t in range(time_steps):
-            demand = demand_data[t]
-            status_flags = output_flags[:, t]
-            
-            # λ探索
-            lambda_val = self.find_lambda_binary_search(generators, demand, status_flags)
-            lambda_values[t] = lambda_val
-            
-            # 各発電機の出力計算
-            for i, gen in enumerate(generators):
-                status = status_flags[i]
-                
-                if status == 0 or status == 2:  # 停止中または起動中
-                    power_outputs[i, t] = 0.0
-                elif status == 1:  # 運転中
-                    power_outputs[i, t] = self.calculate_output_from_lambda(gen, lambda_val)
-                else:
-                    power_outputs[i, t] = 0.0
-        
-        return {
-            'lambda_values': lambda_values,
-            'power_outputs': power_outputs,
-            'total_costs': self.calculate_fuel_costs(generators, power_outputs, output_flags)
-        }
-    
-    def calculate_fuel_costs(self, generators: List[GeneratorConfig], 
-                           power_outputs: np.ndarray, output_flags: np.ndarray) -> Dict:
-        """燃料費計算"""
-        time_steps = power_outputs.shape[1]
-        gen_count = len(generators)
-        
-        fuel_costs = np.zeros((gen_count, time_steps))
-        total_fuel_cost = 0.0
-        
-        for i, gen in enumerate(generators):
-            for t in range(time_steps):
-                if output_flags[i, t] == 1:  # 運転中のみ
-                    power = power_outputs[i, t]
-                    # 燃料費 = (a*P^2 + b*P) * J * 0.25 (15分間隔なので1/4時間)
-                    cost = (gen.heat_rate_a * power**2 + gen.heat_rate_b * power) * \
-                           gen.heat_rate_j * 0.25
-                    fuel_costs[i, t] = cost
-                    total_fuel_cost += cost
-        
-        return {
-            'individual_costs': fuel_costs,
-            'total_cost': total_fuel_cost,
-            'average_cost_per_hour': total_fuel_cost / 24
-        }
-    def __init__(self):
         self.generators = []
         self.demand_data = None
         self.time_steps = 96  # 15分間隔、24時間
@@ -392,17 +270,6 @@ class UnitCommitmentSolver:
                 'future_demand': future_demand,
                 'actions': []
             }
-            demand = self.demand_data[i]
-            
-            # 将来需要（2断面後）
-            future_demand = self.demand_data[min(i + 2, self.time_steps - 1)]
-            
-            # 時間帯別マージン
-            margin_dg, margin_gt = self.get_time_based_margin(i)
-            stop_margin_dg, stop_margin_gt = self.get_stop_margin(i)
-            
-            target_flags = np.zeros(gen_count, dtype=int)
-            total_cap = 0
             
             # === 起動判定処理 ===
             for j, gen in enumerate(sorted_generators):
@@ -683,6 +550,119 @@ def create_unit_commitment_chart(result: Dict) -> go.Figure:
             name='需要',
             line=dict(color='red', width=3),
             hovertemplate='需要: %{y:.0f} kW<br>時刻: %{x}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+    
+    # 発電機状態表示（下段）
+    for i, gen in enumerate(generators):
+        status_text = []
+        for t in range(time_steps):
+            if output_flags[i, t] == 0:
+                status_text.append('停止')
+            elif output_flags[i, t] == 1:
+                status_text.append('運転')
+            elif output_flags[i, t] == 2:
+                status_text.append('起動中')
+        
+        fig.add_trace(
+            go.Scatter(
+                x=time_labels,
+                y=[i] * time_steps,
+                mode='markers',
+                marker=dict(
+                    color=[0 if s == '停止' else 1 if s == '運転' else 0.5 for s in status_text],
+                    colorscale=[[0, 'gray'], [0.5, 'orange'], [1, 'green']],
+                    size=8,
+                    symbol='square'
+                ),
+                name=f'{gen.name}_状態',
+                text=status_text,
+                hovertemplate=f'{gen.name}: %{{text}}<br>時刻: %{{x}}<extra></extra>',
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+    
+    # レイアウト設定
+    fig.update_layout(
+        title='発電機構成計算結果',
+        height=800,
+        hovermode='x unified'
+    )
+    
+    fig.update_xaxes(title_text="時刻", row=2, col=1)
+    fig.update_yaxes(title_text="出力 (kW)", row=1, col=1)
+    fig.update_yaxes(
+        title_text="発電機",
+        row=2, col=1,
+        tickmode='array',
+        tickvals=list(range(len(generators))),
+        ticktext=[gen.name for gen in generators]
+    )
+    
+    return fig
+
+def create_economic_dispatch_chart(uc_result: Dict, ed_result: Dict) -> go.Figure:
+    """経済配分結果のチャートを作成"""
+    if not uc_result or not ed_result:
+        return go.Figure()
+    
+    generators = uc_result['generators']
+    power_outputs = ed_result['power_outputs']
+    lambda_values = ed_result['lambda_values']
+    demand_data = uc_result['demand_data']
+    time_steps = uc_result['time_steps']
+    
+    # 時間軸作成（15分間隔）
+    time_labels = []
+    for i in range(time_steps):
+        hour = (i * 15) // 60
+        minute = (i * 15) % 60
+        time_labels.append(f"{hour:02d}:{minute:02d}")
+    
+    # サブプロット作成
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=('発電機出力配分', 'λ値推移', '燃料費'),
+        row_heights=[0.5, 0.25, 0.25],
+        vertical_spacing=0.08
+    )
+    
+    # 色設定
+    colors = px.colors.qualitative.Set3
+    
+    # 1. 発電機出力の積み上げ面グラフ
+    y_stack = np.zeros(time_steps)
+    
+    for i, gen in enumerate(generators):
+        y_values = power_outputs[i, :]
+        y_upper = y_stack + y_values
+        
+        fig.add_trace(
+            go.Scatter(
+                x=time_labels,
+                y=y_upper,
+                fill='tonexty' if i > 0 else 'tozeroy',
+                mode='none',
+                name=gen.name,
+                fillcolor=colors[i % len(colors)],
+                hovertemplate=f'{gen.name}: %{{y:.1f}} kW<br>時刻: %{{x}}<extra></extra>'
+            ),
+            row=1, col=1
+        )
+        
+        y_stack = y_upper
+    
+    # 需要ライン
+    fig.add_trace(
+        go.Scatter(
+            x=time_labels,
+            y=demand_data,
+            mode='lines',
+            name='需要',
+            line=dict(color='red', width=3, dash='dash'),
+            hovertemplate='需要: %{y:.1f} kW<br>時刻: %{x}<extra></extra>'
         ),
         row=1, col=1
     )
