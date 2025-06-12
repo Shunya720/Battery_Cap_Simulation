@@ -496,7 +496,8 @@ class AnnualBatteryCapacityComparator:
         summary = []
         for capacity, result in self.comparison_results.items():
             # サイクル制約の目標と実績
-            target_cycles = result.get('annual_cycle_target_cycles', 0)
+            cycle_target = result.get('annual_cycle_target', 0)  # この変数が存在しない
+            target_cycles = cycle_target / capacity if capacity > 0 else 0  # ここでエラー
             actual_cycles = result.get('annual_cycles_actual', 0)
             tolerance_cycles = result.get('cycle_tolerance_cycles', 0)
 
