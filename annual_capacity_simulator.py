@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timedelta""
+from datetime import datetime, timedelta
 年間容量シミュレーション専用アプリケーション
 複数容量での年間需要平準化効果比較を実行
 """
