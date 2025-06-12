@@ -1087,7 +1087,7 @@ def display_annual_results():
         def show_annual_demand_comparison(results, capacity_list, annual_demand):
         
     """年間需要比較タブの内容"""
-    st.subheader("年間需要カーブ比較")
+        st.subheader("年間需要カーブ比較")
     
     # グラフ表示期間選択
     col1, col2, col3 = st.columns(3)
