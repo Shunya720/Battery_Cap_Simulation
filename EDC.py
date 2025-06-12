@@ -455,7 +455,30 @@ class UnitCommitmentSolver:
             # === 最小台数構成決定ロジック ===
             margin_dg, margin_gt = self.get_time_based_margin(i)
             current_margin = max(margin_dg, margin_gt)
+                    # 最小台数構成分析
+                    
+            st.subheader("⚙️ 最小台数構成分析")
             
+            running_units_per_time = []
+            for t in range(96):
+                running_count = np.sum(output_flags[:, t] == 1)
+                running_units_per_time.append(running_count)
+            
+            min_running_units = min(running_units_per_time)
+            max_running_units = max(running_units_per_time)
+            avg_running_units = np.mean(running_units_per_time)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("最小運転台数", f"{min_running_units} 台")
+            with col2:
+                st.metric("最大運転台数", f"{max_running_units} 台")
+            with col3:
+                st.metric("平均運転台数", f"{avg_running_units:.1f} 台")
+            with col4:
+                efficiency = (1 - avg_running_units / len(generators)) * 100
+                st.metric("構成効率", f"{efficiency:.1f}%")
+                
             # 現在および将来需要での最小構成を計算
             _, current_required, current_analysis = self.calculate_minimum_units_required(
                 demand, sorted_generators, current_margin
