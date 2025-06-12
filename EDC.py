@@ -458,6 +458,9 @@ class UnitCommitmentSolver:
             current_margin = max(margin_dg, margin_gt)
             
             # 現在および将来需要での最小構成を計算
+            margin_dg, margin_gt = self.get_time_based_margin(i)
+            current_margin = max(margin_dg, margin_gt)
+            
             _, current_required, current_analysis = self.calculate_minimum_units_required(
                 demand, sorted_generators, current_margin
             )
