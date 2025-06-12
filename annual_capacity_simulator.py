@@ -222,7 +222,7 @@ class AnnualBatteryCapacityComparator:
     def run_annual_capacity_comparison(self, annual_demand, capacity_list, 
                                      cycle_target_ratio=365.0, cycle_tolerance=5000,
                                      optimization_trials=20, power_scaling_method='capacity_ratio',
-                                     use_parallel=True, initial_soc=50.0):
+                                     initial_soc=50.0):
         """SOC引き継ぎ対応年間容量別シミュレーション実行"""
         # 年間容量比較のメインロジック
         # この部分は元のコードから追加する必要があります
@@ -280,8 +280,6 @@ class AnnualBatteryCapacityComparator:
                 current_soc = initial_soc  # 年間開始時のSOC
                 soc_history = [initial_soc]  # SOC履歴
                 
-                # 並列処理は使用しない（SOC引き継ぎのため逐次処理必須）
-                st.info("SOC引き継ぎのため逐次処理で実行します")
                 
                 # 日別シミュレーション（逐次処理・SOC引き継ぎ）
                 for day_idx, batch in enumerate(daily_batches):
@@ -516,7 +514,6 @@ def initialize_session_state():
         'sim_annual_cycle_ratio': 365.0,
         'sim_annual_cycle_tolerance': 5000,
         'sim_monthly_optimization_trials': 20,
-        'sim_use_parallel': False,  # SOC引き継ぎのため並列処理は無効
         'sim_individual_capacities': [30000, 60000, 120000, 200000, 300000],
         'sim_individual_powers': [],
         'sim_initial_soc': 50.0  # 初期SOC設定を追加
@@ -886,22 +883,6 @@ def show_simulation_config_section():
     # 処理方式設定
     st.subheader("処理設定")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # SOC引き継ぎのため並列処理は無効
-        st.session_state.sim_use_parallel = False
-        st.info("🔒 SOC引き継ぎのため並列処理は無効化されています")
-        st.checkbox(
-            "並列処理を使用", 
-            value=False,
-            disabled=True,
-            help="SOC引き継ぎ機能のため、逐次処理で実行されます",
-            key="use_parallel_checkbox_disabled"
-        )
-    
-    with col2:
-        # 予想計算時間（逐次処理）
         estimated_time = len(capacity_list) * 365 * st.session_state.sim_monthly_optimization_trials * 0.3
         st.info(f"""
         **予想処理時間（SOC引き継ぎ・逐次処理）:**
@@ -966,7 +947,6 @@ def show_simulation_config_section():
                         cycle_tolerance=st.session_state.sim_annual_cycle_tolerance,
                         optimization_trials=st.session_state.sim_monthly_optimization_trials,
                         power_scaling_method=st.session_state.sim_power_scaling_method,
-                        use_parallel=False,  # SOC引き継ぎのため強制的に無効
                         initial_soc=st.session_state.sim_initial_soc
                     )
                     
