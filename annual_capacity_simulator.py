@@ -810,7 +810,6 @@ def show_simulation_config_section():
             index=["capacity_ratio", "custom", "individual"].index(st.session_state.sim_power_scaling_method) if st.session_state.sim_power_scaling_method in ["capacity_ratio", "custom", "individual"] else 0,
             format_func=lambda x: {
                 "capacity_ratio": "容量比例（容量÷16）",
-                "custom": "カスタム比率（容量÷20）",
                 "individual": "個別入力"
             }[x],
             key="power_scaling_select"
