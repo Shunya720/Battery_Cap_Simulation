@@ -47,7 +47,8 @@ class GeneratorConfig:
     def __init__(self, name: str, min_output: float, max_output: float, 
                  priority: int, min_run_time: float, min_stop_time: float, 
                  is_must_run: bool = False, unit_type: str = "DG",
-                 heat_rate_a: float = 0.0, heat_rate_b: float = 10.0, heat_rate_j: float = 1.0):
+                 heat_rate_a: float = 0.0, heat_rate_b: float = 10.0, 
+                 heat_rate_c: float = 0.0, fuel_price: float = 60354.0):
         self.name = name
         self.min_output = min_output
         self.max_output = max_output
@@ -59,7 +60,8 @@ class GeneratorConfig:
         # 燃費特性係数 (Heat Rate = a*P^2 + b*P + c の形)
         self.heat_rate_a = heat_rate_a  # 2次係数
         self.heat_rate_b = heat_rate_b  # 1次係数
-        self.heat_rate_j = heat_rate_j  # 燃料補正係数
+        self.heat_rate_c = heat_rate_c  # 定数項
+        self.fuel_price = fuel_price    # 燃料単価 [円/kL]
 
 class EconomicDispatchSolver:
     def __init__(self):
@@ -70,15 +72,17 @@ class EconomicDispatchSolver:
     
     def calculate_output_from_lambda(self, generator: GeneratorConfig, lambda_val: float) -> float:
         """λ値から発電機出力を計算"""
-        # λ式: P = (1000*λ - b*J) / (2*a*J)
+        # λ式: dC/dP = λ より、2*a*P + b = λ/u なので P = (λ/u - b) / (2*a)
+        # ここでλ/uは単位変換後のλ値
+        lambda_per_fuel = lambda_val / generator.fuel_price * 1000  # 単位調整
+        
         if generator.heat_rate_a == 0:
             # 2次係数が0の場合は線形
             if generator.heat_rate_b == 0:
                 return generator.min_output
-            output = (1000 * lambda_val) / (generator.heat_rate_b * generator.heat_rate_j)
+            output = lambda_per_fuel / generator.heat_rate_b
         else:
-            output = (1000 * lambda_val - generator.heat_rate_b * generator.heat_rate_j) / \
-                    (2 * generator.heat_rate_a * generator.heat_rate_j)
+            output = (lambda_per_fuel - generator.heat_rate_b) / (2 * generator.heat_rate_a)
         
         # 上下限制約
         output = max(generator.min_output, min(generator.max_output, output))
@@ -173,9 +177,9 @@ class EconomicDispatchSolver:
             for t in range(time_steps):
                 if output_flags[i, t] == 1:  # 運転中のみ
                     power = power_outputs[i, t]
-                    # 燃料費 = (a*P^2 + b*P) * J * 0.25 (15分間隔なので1/4時間)
-                    cost = (gen.heat_rate_a * power**2 + gen.heat_rate_b * power) * \
-                           gen.heat_rate_j * 0.25
+                    # 燃料費 = (a*P^2 + b*P + c) * u * 0.25 (15分間隔なので1/4時間)
+                    fuel_consumption = gen.heat_rate_a * power**2 + gen.heat_rate_b * power + gen.heat_rate_c
+                    cost = fuel_consumption * gen.fuel_price * 0.25
                     fuel_costs[i, t] = cost
                     total_fuel_cost += cost
         
@@ -960,7 +964,32 @@ def main():
     # 発電機数設定
     num_generators = st.number_input("発電機台数", min_value=1, max_value=20, value=8)
     
-    # 発電機設定フォーム
+def get_default_generator_config(index: int) -> dict:
+    """デフォルト発電機設定を取得"""
+    defaults = {
+        0: {"name": "DG3", "type": "DG", "min": 1000, "max": 3000, "priority": 1, 
+            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420},
+        1: {"name": "DG4", "type": "DG", "min": 1200, "max": 4000, "priority": 2, 
+            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103},
+        2: {"name": "DG5", "type": "DG", "min": 1500, "max": 5000, "priority": 3, 
+            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300},
+        3: {"name": "DG6", "type": "DG", "min": 800, "max": 2500, "priority": 4, 
+            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
+        4: {"name": "DG7", "type": "DG", "min": 2000, "max": 6000, "priority": 5, 
+            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
+        5: {"name": "GT1", "type": "GT", "min": 3000, "max": 10000, "priority": 6, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+        6: {"name": "GT2", "type": "GT", "min": 3000, "max": 10000, "priority": 7, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+        7: {"name": "GT3", "type": "GT", "min": 3000, "max": 10000, "priority": 8, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
+    }
+    
+    if index in defaults:
+        return defaults[index]
+    else:
+        return {"name": f"発電機{index+1}", "type": "DG", "min": 1000, "max": 5000, "priority": index+1,
+                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300}
     generators_config = []
     
     cols = st.columns(2)
