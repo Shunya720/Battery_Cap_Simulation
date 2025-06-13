@@ -609,26 +609,26 @@ class UnitCommitmentSolver:
                             should_start = True
                             start_reason = f"予備力不足対応（{reserve_margin:.0f}kW）"
                 
-                    # 起動決定
+                # 起動決定
                 if should_start:
                     target_flags[j] = 1
                     step_debug['actions'].append(f"{gen.name}: {start_reason}")
             
-                # 初回断面の処理（起動時間無視）
-                if i == 0:
-                    for j in range(gen_count):
-                        if sorted_generators[j].is_must_run:
-                            output_flags[j, i] = 1
-                            prev_flags[j] = 1
-                        elif target_flags[j] == 1:
-                            # 初期断面では起動時間を無視して即座に運転状態にする
-                            output_flags[j, i] = 1
-                            prev_flags[j] = 1
-                            last_start[j] = i
-                        else:
-                            output_flags[j, i] = 0
-                            prev_flags[j] = 0
-                    continue
+            # 初回断面の処理（起動時間無視）
+            if i == 0:
+                for j in range(gen_count):
+                    if sorted_generators[j].is_must_run:
+                        output_flags[j, i] = 1
+                        prev_flags[j] = 1
+                    elif target_flags[j] == 1:
+                        # 初期断面では起動時間を無視して即座に運転状態にする
+                        output_flags[j, i] = 1
+                        prev_flags[j] = 1
+                        last_start[j] = i
+                    else:
+                        output_flags[j, i] = 0
+                        prev_flags[j] = 0
+                continue
             
             # === 解列判定処理 ===
             final_flags = target_flags.copy()
@@ -1009,18 +1009,18 @@ def generate_detailed_report(uc_result: Dict, ed_result: Dict = None) -> str:
     # 経済配分結果がある場合
     if ed_result:
         total_cost = ed_result['total_costs']['total_cost']
-        total_fuel_cost = ed_result['total_costs'].get('total_fuel_cost', 0)      # 追加
-        total_startup_cost = ed_result['total_costs'].get('total_startup_cost', 0)  # 追加
-        total_shutdown_cost = ed_result['total_costs'].get('total_shutdown_cost', 0)  # 追加
+        total_fuel_cost = ed_result['total_costs'].get('total_fuel_cost', 0)
+        total_startup_cost = ed_result['total_costs'].get('total_startup_cost', 0)
+        total_shutdown_cost = ed_result['total_costs'].get('total_shutdown_cost', 0)
         avg_cost_per_hour = ed_result['total_costs']['average_cost_per_hour']
         total_generation = np.sum(ed_result['power_outputs']) * 0.25  # kWh
         avg_cost_per_kwh = total_cost / total_generation if total_generation > 0 else 0
         
-        report.append(f"- **総コスト**: {total_cost:,.0f} 円")                    # 変更
-        report.append(f"  - 燃料費: {total_fuel_cost:,.0f} 円 ({total_fuel_cost/total_cost*100:.1f}%)")    # 追加
-        report.append(f"  - 起動費: {total_startup_cost:,.0f} 円 ({total_startup_cost/total_cost*100:.1f}%)")  # 追加
-        report.append(f"  - 停止費: {total_shutdown_cost:,.0f} 円 ({total_shutdown_cost/total_cost*100:.1f}%)")  # 追加
-        report.append(f"- **平均コスト**: {avg_cost_per_hour:,.0f} 円/時")        # 変更
+        report.append(f"- **総コスト**: {total_cost:,.0f} 円")
+        report.append(f"  - 燃料費: {total_fuel_cost:,.0f} 円 ({total_fuel_cost/total_cost*100:.1f}%)")
+        report.append(f"  - 起動費: {total_startup_cost:,.0f} 円 ({total_startup_cost/total_cost*100:.1f}%)")
+        report.append(f"  - 停止費: {total_shutdown_cost:,.0f} 円 ({total_shutdown_cost/total_cost*100:.1f}%)")
+        report.append(f"- **平均コスト**: {avg_cost_per_hour:,.0f} 円/時")
         report.append(f"- **総発電量**: {total_generation:,.0f} kWh")
         report.append(f"- **平均発電コスト**: {avg_cost_per_kwh:.2f} 円/kWh")
     
@@ -1112,174 +1112,6 @@ def generate_detailed_report(uc_result: Dict, ed_result: Dict = None) -> str:
                     report.append(f"- **単位発電コスト**: {unit_cost:.2f} 円/kWh")
         
         report.append("")
-    
-    # 4. 時間帯別分析
-    report.append("## 🕐 時間帯別分析")
-    
-    # ピーク時間帯の定義
-    peak_hours = list(range(68, 88))  # 17:00-22:00 (17*4 to 22*4)
-    off_peak_hours = [i for i in range(96) if i not in peak_hours]
-    
-    peak_demand = np.mean([demand_data[i] for i in peak_hours if i < len(demand_data)])
-    off_peak_demand = np.mean([demand_data[i] for i in off_peak_hours if i < len(demand_data)])
-    
-    report.append(f"### ピーク時間帯 (17:00-22:00)")
-    report.append(f"- **平均需要**: {peak_demand:.0f} kW")
-    
-    # ピーク時の運転台数
-    peak_running_units = []
-    for i in peak_hours:
-        if i < len(demand_data):
-            running_count = np.sum(output_flags[:, i] == 1)
-            peak_running_units.append(running_count)
-    
-    if peak_running_units:
-        avg_peak_units = np.mean(peak_running_units)
-        report.append(f"- **平均運転台数**: {avg_peak_units:.1f} 台")
-    
-    report.append(f"### オフピーク時間帯")
-    report.append(f"- **平均需要**: {off_peak_demand:.0f} kW")
-    
-    # オフピーク時の運転台数
-    off_peak_running_units = []
-    for i in off_peak_hours:
-        if i < len(demand_data):
-            running_count = np.sum(output_flags[:, i] == 1)
-            off_peak_running_units.append(running_count)
-    
-    if off_peak_running_units:
-        avg_off_peak_units = np.mean(off_peak_running_units)
-        report.append(f"- **平均運転台数**: {avg_off_peak_units:.1f} 台")
-    
-    load_factor = off_peak_demand / peak_demand if peak_demand > 0 else 0
-    report.append(f"- **負荷率**: {load_factor:.2f}")
-    report.append("")
-    
-    # 5. 経済性分析（経済配分結果がある場合）
-    if ed_result:
-        report.append("## 💰 経済性分析")
-        
-        lambda_values = ed_result['lambda_values']
-        power_outputs = ed_result['power_outputs']
-        fuel_costs = ed_result['total_costs']['individual_costs']
-        
-        # λ値分析
-        report.append("### λ値分析")
-        report.append(f"- **最小λ値**: {lambda_values.min():.3f}")
-        report.append(f"- **最大λ値**: {lambda_values.max():.3f}")
-        report.append(f"- **平均λ値**: {lambda_values.mean():.3f}")
-        report.append(f"- **λ値標準偏差**: {lambda_values.std():.3f}")
-        
-        # 時間帯別λ値
-        peak_lambda = np.mean([lambda_values[i] for i in peak_hours if i < len(lambda_values)])
-        off_peak_lambda = np.mean([lambda_values[i] for i in off_peak_hours if i < len(lambda_values)])
-        
-        report.append(f"- **ピーク時平均λ値**: {peak_lambda:.3f}")
-        report.append(f"- **オフピーク時平均λ値**: {off_peak_lambda:.3f}")
-        report.append("")
-        
-        # コスト分析
-        report.append("### 燃料費分析")
-        
-        # 発電機別コスト効率
-        report.append("#### 発電機別コスト効率")
-        cost_efficiency = []
-        for i, gen in enumerate(generators):
-            gen_outputs = power_outputs[i, :]
-            gen_costs = fuel_costs[i, :]
-            total_gen_output = np.sum(gen_outputs) * 0.25  # kWh
-            total_gen_cost = np.sum(gen_costs)
-            
-            if total_gen_output > 0:
-                unit_cost = total_gen_cost / total_gen_output
-                cost_efficiency.append((gen.name, unit_cost, total_gen_output, total_gen_cost))
-        
-        # コスト効率でソート
-        cost_efficiency.sort(key=lambda x: x[1])
-        
-        for name, unit_cost, total_output, total_cost in cost_efficiency:
-            report.append(f"- **{name}**: {unit_cost:.2f} 円/kWh (発電量: {total_output:,.1f} kWh, 燃料費: {total_cost:,.0f} 円)")
-        
-        report.append("")
-    
-    # 6. 運用制約分析
-    report.append("## ⚙️ 運用制約分析")
-    
-    # 最小運転・停止時間制約違反チェック
-    constraint_violations = []
-    
-    for i, gen in enumerate(generators):
-        min_run_steps = int(gen.min_run_time * 4)
-        min_stop_steps = int(gen.min_stop_time * 4)
-        
-        # 運転期間分析
-        current_run = 0
-        current_stop = 0
-        run_violations = 0
-        stop_violations = 0
-        
-        for t in range(96):
-            if output_flags[i, t] == 1:  # 運転中
-                if current_stop > 0 and current_stop < min_stop_steps:
-                    stop_violations += 1
-                current_run += 1
-                current_stop = 0
-            else:  # 停止中
-                if current_run > 0 and current_run < min_run_steps:
-                    run_violations += 1
-                current_stop += 1
-                current_run = 0
-        
-        if run_violations > 0 or stop_violations > 0:
-            constraint_violations.append(f"- **{gen.name}**: 最小運転時間違反 {run_violations}回, 最小停止時間違反 {stop_violations}回")
-    
-    if constraint_violations:
-        report.append("### 制約違反")
-        report.extend(constraint_violations)
-    else:
-        report.append("### 制約遵守状況")
-        report.append("- ✅ すべての発電機で最小運転・停止時間制約が遵守されています")
-    
-    report.append("")
-    
-    # 7. 改善提案
-    report.append("## 💡 改善提案")
-    
-    suggestions = []
-    
-    # 最小台数構成の効率性評価
-    if avg_running_units <= len(generators) * 0.6:
-        suggestions.append("### 最小台数構成の効果")
-        efficiency_rate = (1 - avg_running_units / len(generators)) * 100
-        suggestions.append(f"- ✅ **優秀**: 平均{avg_running_units:.1f}台/{len(generators)}台運転で効率性{efficiency_rate:.1f}%を実現")
-    
-    # 稼働率の低い発電機
-    low_utilization_gens = []
-    for i, gen in enumerate(generators):
-        running_steps = np.sum(output_flags[i, :] == 1)
-        utilization = (running_steps / 96) * 100
-        if utilization < 20 and not gen.is_must_run:
-            low_utilization_gens.append((gen.name, utilization))
-    
-    if low_utilization_gens:
-        suggestions.append("### 稼働率改善")
-        for name, util in low_utilization_gens:
-            suggestions.append(f"- **{name}**: 稼働率{util:.1f}%と低く、優先順位の見直しを検討")
-    
-    # コスト効率の改善
-    if ed_result and cost_efficiency:
-        if len(cost_efficiency) > 1:
-            highest_cost_gen = cost_efficiency[-1]  # 最もコストが高い
-            lowest_cost_gen = cost_efficiency[0]   # 最もコストが低い
-            
-            suggestions.append("### コスト効率改善")
-            suggestions.append(f"- **{highest_cost_gen[0]}**: 発電コスト{highest_cost_gen[1]:.2f}円/kWh と高く、運用見直しを検討")
-            suggestions.append(f"- **{lowest_cost_gen[0]}**: 発電コスト{lowest_cost_gen[1]:.2f}円/kWh と効率的、優先的活用を推奨")
-    
-    if suggestions:
-        report.extend(suggestions)
-    else:
-        report.append("- ✅ 現在の運用計画は効率的で、最小台数構成が適切に機能しています")
     
     report.append("")
     report.append("---")
