@@ -1312,28 +1312,37 @@ def get_default_generator_config(index: int) -> dict:
     """デフォルト発電機設定を取得"""
     defaults = {
         0: {"name": "DG3", "type": "DG", "min": 5000, "max": 10000, "priority": 1, 
-            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420},
+            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420,
+            "startup_cost": 25893, "shutdown_cost": 42084},
         1: {"name": "DG4", "type": "DG", "min": 5000, "max": 10000, "priority": 2, 
-            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103},
+            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103,
+            "startup_cost": 23116, "shutdown_cost": 50116},
         2: {"name": "DG5", "type": "DG", "min": 7500, "max": 15000, "priority": 3, 
-            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300},
+            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300,
+            "startup_cost": 50630, "shutdown_cost": 65729},
         3: {"name": "DG6", "type": "DG", "min": 6000, "max": 12000, "priority": 4, 
-            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216},
+            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216,
+            "startup_cost": 13580, "shutdown_cost": 13097},
         4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
-            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612},
+            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612,
+            "startup_cost": 13580, "shutdown_cost": 13097},
         5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643},
         6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800},
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643},
         7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800}
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643}
     }
     
     if index in defaults:
         return defaults[index]
     else:
         return {"name": f"発電機{index+1}", "type": "DG", "min": 1000, "max": 5000, "priority": index+1,
-                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300}
+                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300,
+                "startup_cost": 10000, "shutdown_cost": 10000}
 
 def main():
     st.markdown('<div class="main-header"><h1>⚡ 発電機構成計算ツール</h1></div>', 
@@ -1487,8 +1496,14 @@ def main():
                     heat_rate_c = st.number_input(f"c係数 (定数)", value=float(default_config["heat_c"]), 
                                                 step=1.0, key=f"heat_c_{i}")
                 
-                # 燃料単価
-                fuel_price = st.number_input(f"燃料単価 (円/kL)", value=60354.0, step=100.0, key=f"fuel_price_{i}")
+                st.write("**💰 燃料単価・起動停止費**")
+                col6, col7, col8 = st.columns(3)
+                with col6:
+                    fuel_price = st.number_input(f"燃料単価 (円/kL)", value=60354.0, step=100.0, key=f"fuel_price_{i}")
+                with col7:
+                    startup_cost = st.number_input(f"起動費 (円)", value=float(default_config.get("startup_cost", 10000)), step=100.0, key=f"startup_cost_{i}")
+                with col8:
+                    shutdown_cost = st.number_input(f"停止費 (円)", value=float(default_config.get("shutdown_cost", 10000)), step=100.0, key=f"shutdown_cost_{i}")
                 
                 generator = GeneratorConfig(
                     name=name,
@@ -1619,11 +1634,13 @@ def main():
                     costs = ed_result['total_costs']
                     st.subheader("🔥 燃料費統計")
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("総燃料費", f"{costs['total_cost']:.0f} 円")
-                    with col2:
-                        st.metric("平均燃料費", f"{costs['average_cost_per_hour']:.0f} 円/時")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("総燃料費", f"{costs.get('total_fuel_cost', 0):.0f} 円")
+                    st.metric("総起動費", f"{costs.get('total_startup_cost', 0):.0f} 円")
+                with col2:
+                    st.metric("総停止費", f"{costs.get('total_shutdown_cost', 0):.0f} 円")
+                    st.metric("総コスト", f"{costs['total_cost']:.0f} 円")
         else:
             # 構成計算結果のみ
             fig_uc = create_unit_commitment_chart(uc_result)
