@@ -278,185 +278,185 @@ class UnitCommitmentSolver:
     def set_demand_data(self, demand_data: np.ndarray):
         self.demand_data = demand_data[:self.time_steps]
     
-def calculate_minimum_units_required(self, demand: float, sorted_generators: List[GeneratorConfig], 
-                                   margin_rate: float = 0.0) -> Tuple[int, List[int], Dict]:
-    """
-    優先順位に基づいて需要を満たす最小台数の発電機を選択
-    """
-    target_capacity = demand * (1 + margin_rate)
-    selected_units = []
-    cumulative_capacity = 0.0
-    cumulative_min_output = 0.0
-    
-    analysis = {
-        'demand': demand,
-        'target_capacity': target_capacity,
-        'margin_rate': margin_rate,
-        'selection_process': [],
-        'feasibility_check': True,
-        'selection_complete': False
-    }
-    
-    # Step 1: マストラン発電機を必須選択
-    for i, gen in enumerate(sorted_generators):
-        if gen.is_must_run:
+    def calculate_minimum_units_required(self, demand: float, sorted_generators: List[GeneratorConfig], 
+                                       margin_rate: float = 0.0) -> Tuple[int, List[int], Dict]:
+        """
+        優先順位に基づいて需要を満たす最小台数の発電機を選択
+        """
+        target_capacity = demand * (1 + margin_rate)
+        selected_units = []
+        cumulative_capacity = 0.0
+        cumulative_min_output = 0.0
+        
+        analysis = {
+            'demand': demand,
+            'target_capacity': target_capacity,
+            'margin_rate': margin_rate,
+            'selection_process': [],
+            'feasibility_check': True,
+            'selection_complete': False
+        }
+        
+        # Step 1: マストラン発電機を必須選択
+        for i, gen in enumerate(sorted_generators):
+            if gen.is_must_run:
+                selected_units.append(i)
+                cumulative_capacity += gen.max_output
+                cumulative_min_output += gen.min_output
+                analysis['selection_process'].append({
+                    'step': len(selected_units),
+                    'unit': gen.name,
+                    'priority': gen.priority,
+                    'reason': 'マストラン（必須選択）',
+                    'capacity_added': gen.max_output,
+                    'cumulative_capacity': cumulative_capacity,
+                    'target_met': cumulative_capacity >= target_capacity
+                })
+        
+        # Step 2: 優先順位順に必要最小限の発電機を追加
+        for i, gen in enumerate(sorted_generators):
+            # 既に選択済み（マストラン）の場合はスキップ
+            if gen.is_must_run:
+                continue
+            
+            # 目標容量に達している場合は選択を停止
+            if cumulative_capacity >= target_capacity:
+                analysis['selection_complete'] = True
+                break
+            
+            # 優先順位に従って発電機を追加
             selected_units.append(i)
             cumulative_capacity += gen.max_output
             cumulative_min_output += gen.min_output
+            
+            target_met = cumulative_capacity >= target_capacity
             analysis['selection_process'].append({
                 'step': len(selected_units),
                 'unit': gen.name,
                 'priority': gen.priority,
-                'reason': 'マストラン（必須選択）',
+                'reason': f'容量不足解消（{cumulative_capacity - gen.max_output:.0f} → {cumulative_capacity:.0f} kW）',
                 'capacity_added': gen.max_output,
                 'cumulative_capacity': cumulative_capacity,
-                'target_met': cumulative_capacity >= target_capacity
+                'target_met': target_met
             })
-    
-    # Step 2: 優先順位順に必要最小限の発電機を追加
-    for i, gen in enumerate(sorted_generators):
-        # 既に選択済み（マストラン）の場合はスキップ
-        if gen.is_must_run:
-            continue
-        
-        # 目標容量に達している場合は選択を停止
-        if cumulative_capacity >= target_capacity:
-            analysis['selection_complete'] = True
-            break
-        
-        # 優先順位に従って発電機を追加
-        selected_units.append(i)
-        cumulative_capacity += gen.max_output
-        cumulative_min_output += gen.min_output
-        
-        target_met = cumulative_capacity >= target_capacity
-        analysis['selection_process'].append({
-            'step': len(selected_units),
-            'unit': gen.name,
-            'priority': gen.priority,
-            'reason': f'容量不足解消（{cumulative_capacity - gen.max_output:.0f} → {cumulative_capacity:.0f} kW）',
-            'capacity_added': gen.max_output,
-            'cumulative_capacity': cumulative_capacity,
-            'target_met': target_met
-        })
-        
-        # 目標容量に達したら選択完了
-        if target_met:
-            analysis['selection_complete'] = True
-            break
-    
-    # Step 3: 最小出力制約の実現可能性チェック
-    analysis['feasibility_check'] = cumulative_min_output <= demand
-    analysis['final_capacity'] = cumulative_capacity
-    analysis['final_min_output'] = cumulative_min_output
-    analysis['capacity_shortage'] = max(0, target_capacity - cumulative_capacity)
-    analysis['min_output_excess'] = max(0, cumulative_min_output - demand)
-    
-    return len(selected_units), selected_units, analysis
-
-def validate_unit_commitment_feasibility(self, demand_data: np.ndarray, 
-                                       output_flags: np.ndarray) -> Dict:
-    """構成計算結果の実現可能性を検証"""
-    sorted_generators = sorted(self.generators, key=lambda x: x.priority)
-    validation_results = {
-        'overall_feasible': True,
-        'infeasible_periods': [],
-        'reserve_warnings': [],  # 予備力警告を追加
-        'statistics': {
-            'total_periods': len(demand_data),
-            'feasible_periods': 0,
-            'min_output_violations': 0,
-            'capacity_shortages': 0,
-            'upper_reserve_shortages': 0,  # 上予備力不足
-            'lower_reserve_shortages': 0   # 下予備力不足
-        }
-    }
-
-    # 予備力要求量の設定（構成計算設定のマージン率を使用）
-    upper_reserve_rate = max(self.margin_rate_dg, self.margin_rate_gt)  # 上予備力率
-    lower_reserve_rate = max(self.stop_margin_rate_dg, self.stop_margin_rate_gt)  # 下予備力率
-
-    for t in range(len(demand_data)):
-        demand = demand_data[t]
-        period_analysis = {
-            'time_step': t,
-            'hour': (t * 0.25) % 24,
-            'demand': demand,
-            'issues': []
-        }
-        
-        reserve_analysis = {
-            'time_step': t,
-            'hour': (t * 0.25) % 24,
-            'demand': demand,
-            'warnings': []
-        }
-        
-        # 運転中発電機の容量チェック
-        total_min_output = 0.0
-        total_max_output = 0.0
-        
-        for i, gen in enumerate(sorted_generators):
-            if output_flags[i, t] == 1:  # 運転中
-                total_min_output += gen.min_output
-                total_max_output += gen.max_output
-        
-        # 実現可能性チェック
-        is_feasible = True
-        
-        if total_max_output < demand:
-            period_analysis['issues'].append(
-                f"容量不足: 最大出力{total_max_output:.0f}kW < 需要{demand:.0f}kW"
-            )
-            validation_results['statistics']['capacity_shortages'] += 1
-            is_feasible = False
-        
-        if total_min_output > demand:
-            period_analysis['issues'].append(
-                f"最小出力超過: 最小出力{total_min_output:.0f}kW > 需要{demand:.0f}kW"
-            )
-            validation_results['statistics']['min_output_violations'] += 1
-            is_feasible = False
-        
-        # 予備力チェック（実現可能な場合のみ）
-        if is_feasible:
-            # 上予備力チェック（需要増加への対応余力）
-            required_upper_reserve = demand * upper_reserve_rate
-            available_upper_reserve = total_max_output - demand
             
-            if available_upper_reserve < required_upper_reserve:
-                reserve_analysis['warnings'].append(
-                    f"上予備力不足: 必要{required_upper_reserve:.0f}kW > 利用可能{available_upper_reserve:.0f}kW"
+            # 目標容量に達したら選択完了
+            if target_met:
+                analysis['selection_complete'] = True
+                break
+        
+        # Step 3: 最小出力制約の実現可能性チェック
+        analysis['feasibility_check'] = cumulative_min_output <= demand
+        analysis['final_capacity'] = cumulative_capacity
+        analysis['final_min_output'] = cumulative_min_output
+        analysis['capacity_shortage'] = max(0, target_capacity - cumulative_capacity)
+        analysis['min_output_excess'] = max(0, cumulative_min_output - demand)
+        
+        return len(selected_units), selected_units, analysis
+
+    def validate_unit_commitment_feasibility(self, demand_data: np.ndarray, 
+                                           output_flags: np.ndarray) -> Dict:
+        """構成計算結果の実現可能性を検証"""
+        sorted_generators = sorted(self.generators, key=lambda x: x.priority)
+        validation_results = {
+            'overall_feasible': True,
+            'infeasible_periods': [],
+            'reserve_warnings': [],  # 予備力警告を追加
+            'statistics': {
+                'total_periods': len(demand_data),
+                'feasible_periods': 0,
+                'min_output_violations': 0,
+                'capacity_shortages': 0,
+                'upper_reserve_shortages': 0,  # 上予備力不足
+                'lower_reserve_shortages': 0   # 下予備力不足
+            }
+        }
+
+        # 予備力要求量の設定（構成計算設定のマージン率を使用）
+        upper_reserve_rate = max(self.margin_rate_dg, self.margin_rate_gt)  # 上予備力率
+        lower_reserve_rate = max(self.stop_margin_rate_dg, self.stop_margin_rate_gt)  # 下予備力率
+
+        for t in range(len(demand_data)):
+            demand = demand_data[t]
+            period_analysis = {
+                'time_step': t,
+                'hour': (t * 0.25) % 24,
+                'demand': demand,
+                'issues': []
+            }
+            
+            reserve_analysis = {
+                'time_step': t,
+                'hour': (t * 0.25) % 24,
+                'demand': demand,
+                'warnings': []
+            }
+            
+            # 運転中発電機の容量チェック
+            total_min_output = 0.0
+            total_max_output = 0.0
+            
+            for i, gen in enumerate(sorted_generators):
+                if output_flags[i, t] == 1:  # 運転中
+                    total_min_output += gen.min_output
+                    total_max_output += gen.max_output
+            
+            # 実現可能性チェック
+            is_feasible = True
+            
+            if total_max_output < demand:
+                period_analysis['issues'].append(
+                    f"容量不足: 最大出力{total_max_output:.0f}kW < 需要{demand:.0f}kW"
                 )
-                validation_results['statistics']['upper_reserve_shortages'] += 1
+                validation_results['statistics']['capacity_shortages'] += 1
+                is_feasible = False
             
-            # 下予備力チェック（需要減少への対応余力）
-            required_lower_reserve = demand * lower_reserve_rate
-            available_lower_reserve = demand - total_min_output
-            
-            if available_lower_reserve < required_lower_reserve:
-                reserve_analysis['warnings'].append(
-                    f"下予備力不足: 必要{required_lower_reserve:.0f}kW > 利用可能{available_lower_reserve:.0f}kW"
+            if total_min_output > demand:
+                period_analysis['issues'].append(
+                    f"最小出力超過: 最小出力{total_min_output:.0f}kW > 需要{demand:.0f}kW"
                 )
-                validation_results['statistics']['lower_reserve_shortages'] += 1
+                validation_results['statistics']['min_output_violations'] += 1
+                is_feasible = False
             
-            # 予備力警告がある場合は記録
-            if reserve_analysis['warnings']:
-                validation_results['reserve_warnings'].append(reserve_analysis)
+            # 予備力チェック（実現可能な場合のみ）
+            if is_feasible:
+                # 上予備力チェック（需要増加への対応余力）
+                required_upper_reserve = demand * upper_reserve_rate
+                available_upper_reserve = total_max_output - demand
+                
+                if available_upper_reserve < required_upper_reserve:
+                    reserve_analysis['warnings'].append(
+                        f"上予備力不足: 必要{required_upper_reserve:.0f}kW > 利用可能{available_upper_reserve:.0f}kW"
+                    )
+                    validation_results['statistics']['upper_reserve_shortages'] += 1
+                
+                # 下予備力チェック（需要減少への対応余力）
+                required_lower_reserve = demand * lower_reserve_rate
+                available_lower_reserve = demand - total_min_output
+                
+                if available_lower_reserve < required_lower_reserve:
+                    reserve_analysis['warnings'].append(
+                        f"下予備力不足: 必要{required_lower_reserve:.0f}kW > 利用可能{available_lower_reserve:.0f}kW"
+                    )
+                    validation_results['statistics']['lower_reserve_shortages'] += 1
+                
+                # 予備力警告がある場合は記録
+                if reserve_analysis['warnings']:
+                    validation_results['reserve_warnings'].append(reserve_analysis)
+            
+            if is_feasible:
+                validation_results['statistics']['feasible_periods'] += 1
+            else:
+                validation_results['overall_feasible'] = False
+                validation_results['infeasible_periods'].append(period_analysis)
         
-        if is_feasible:
-            validation_results['statistics']['feasible_periods'] += 1
-        else:
-            validation_results['overall_feasible'] = False
-            validation_results['infeasible_periods'].append(period_analysis)
-    
-    # 統計情報の追加
-    total_periods = validation_results['statistics']['total_periods']
-    feasible_rate = (validation_results['statistics']['feasible_periods'] / total_periods) * 100
-    validation_results['statistics']['feasibility_rate'] = feasible_rate
-    
-    return validation_results
-    
+        # 統計情報の追加
+        total_periods = validation_results['statistics']['total_periods']
+        feasible_rate = (validation_results['statistics']['feasible_periods'] / total_periods) * 100
+        validation_results['statistics']['feasibility_rate'] = feasible_rate
+        
+        return validation_results
+        
     def get_time_based_margin(self, time_step: int) -> Tuple[float, float]:
         """時間帯別マージン設定（17:00-22:00がピーク）"""
         hour = (time_step * 0.25) % 24
@@ -526,9 +526,6 @@ def validate_unit_commitment_feasibility(self, demand_data: np.ndarray,
             current_margin = max(margin_dg, margin_gt)
             
             # 現在および将来需要での最小構成を計算
-            margin_dg, margin_gt = self.get_time_based_margin(i)
-            current_margin = max(margin_dg, margin_gt)
-            
             _, current_required, current_analysis = self.calculate_minimum_units_required(
                 demand, sorted_generators, current_margin
             )
