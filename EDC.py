@@ -354,21 +354,28 @@ class UnitCommitmentSolver:
         
         return len(selected_units), selected_units, analysis
     
-    def validate_unit_commitment_feasibility(self, demand_data: np.ndarray, 
-                                           output_flags: np.ndarray) -> Dict:
-        """構成計算結果の実現可能性を検証"""
-        sorted_generators = sorted(self.generators, key=lambda x: x.priority)
-        validation_results = {
-            'overall_feasible': True,
-            'infeasible_periods': [],
-            'statistics': {
-                'total_periods': len(demand_data),
-                'feasible_periods': 0,
-                'min_output_violations': 0,
-                'capacity_shortages': 0
+        def validate_unit_commitment_feasibility(self, demand_data: np.ndarray, 
+                                       output_flags: np.ndarray) -> Dict:
+            """構成計算結果の実現可能性を検証"""
+            sorted_generators = sorted(self.generators, key=lambda x: x.priority)
+            validation_results = {
+                'overall_feasible': True,
+                'infeasible_periods': [],
+                'reserve_warnings': [],  # 予備力警告を追加
+                'statistics': {
+                    'total_periods': len(demand_data),
+                    'feasible_periods': 0,
+                    'min_output_violations': 0,
+                    'capacity_shortages': 0,
+                    'upper_reserve_shortages': 0,  # 上予備力不足
+                    'lower_reserve_shortages': 0   # 下予備力不足
+                }
             }
-        }
-        
+
+        # 予備力要求量の設定（構成計算設定のマージン率を使用）
+        upper_reserve_rate = max(self.margin_rate_dg, self.margin_rate_gt)  # 上予備力率
+        lower_reserve_rate = max(self.stop_margin_rate_dg, self.stop_margin_rate_gt)  # 下予備力率
+
         for t in range(len(demand_data)):
             demand = demand_data[t]
             period_analysis = {
@@ -403,6 +410,32 @@ class UnitCommitmentSolver:
                 )
                 validation_results['statistics']['min_output_violations'] += 1
                 is_feasible = False
+            
+# 予備力チェック（実現可能な場合のみ）
+            if is_feasible:
+                # 上予備力チェック（需要増加への対応余力）
+                required_upper_reserve = demand * upper_reserve_rate
+                available_upper_reserve = total_max_output - demand
+                
+                if available_upper_reserve < required_upper_reserve:
+                    reserve_analysis['warnings'].append(
+                        f"上予備力不足: 必要{required_upper_reserve:.0f}kW > 利用可能{available_upper_reserve:.0f}kW"
+                    )
+                    validation_results['statistics']['upper_reserve_shortages'] += 1
+                
+                # 下予備力チェック（需要減少への対応余力）
+                required_lower_reserve = demand * lower_reserve_rate
+                available_lower_reserve = demand - total_min_output
+                
+                if available_lower_reserve < required_lower_reserve:
+                    reserve_analysis['warnings'].append(
+                        f"下予備力不足: 必要{required_lower_reserve:.0f}kW > 利用可能{available_lower_reserve:.0f}kW"
+                    )
+                    validation_results['statistics']['lower_reserve_shortages'] += 1
+                
+                # 予備力警告がある場合は記録
+                if reserve_analysis['warnings']:
+                    validation_results['reserve_warnings'].append(reserve_analysis)
             
             if is_feasible:
                 validation_results['statistics']['feasible_periods'] += 1
@@ -1873,39 +1906,52 @@ def main():
             
             st.subheader("🔍 構成計算実現可能性検証")
             
-            # 全体結果
+# 全体結果
             if validation['overall_feasible']:
                 st.success("✅ 全期間で実現可能な構成計算結果です")
             else:
                 st.error(f"❌ {len(validation['infeasible_periods'])}期間で実現不可能な構成があります")
             
+            # 予備力警告の表示
+            if 'reserve_warnings' in validation and validation['reserve_warnings']:
+                st.warning(f"⚠️ {len(validation['reserve_warnings'])}期間で予備力不足があります")
+            
             # 統計情報
             stats = validation['statistics']
-            val_col1, val_col2, val_col3, val_col4 = st.columns(4)
             
-            with val_col1:
-                st.metric("総期間", f"{stats['total_periods']} 期間")
-            with val_col2:
-                st.metric("実現可能期間", f"{stats['feasible_periods']} 期間")
-            with val_col3:
-                st.metric("実現可能率", f"{stats['feasibility_rate']:.1f}%")
-            with val_col4:
-                feasible_periods = stats['feasible_periods']
-                total_periods = stats['total_periods']
-                delta = feasible_periods - (total_periods - feasible_periods)
+            # 予備力統計の表示（新規追加）
+            if 'upper_reserve_shortages' in stats or 'lower_reserve_shortages' in stats:
+                st.subheader("🔋 予備力統計")
+                reserve_col1, reserve_col2, reserve_col3, reserve_col4 = st.columns(4)
+                
+                with reserve_col1:
+                    st.metric("上予備力不足", f"{stats.get('upper_reserve_shortages', 0)} 期間")
+                with reserve_col2:
+                    st.metric("下予備力不足", f"{stats.get('lower_reserve_shortages', 0)} 期間")
+                with reserve_col3:
+                    total_reserve_issues = stats.get('upper_reserve_shortages', 0) + stats.get('lower_reserve_shortages', 0)
+                    st.metric("予備力問題合計", f"{total_reserve_issues} 期間")
+                with reserve_col4:
+                    reserve_adequacy_rate = ((stats['total_periods'] - total_reserve_issues) / stats['total_periods']) * 100
+                    st.metric("予備力充足率", f"{reserve_adequacy_rate:.1f}%")
                 st.metric("実現性指標", "良好" if stats['feasibility_rate'] > 95 else "要改善", 
                          delta=f"{delta} 期間差")
             
             # 問題期間の詳細表示
-            if validation['infeasible_periods']:
-                with st.expander(f"⚠️ 問題期間の詳細 ({len(validation['infeasible_periods'])}件)"):
-                    for period in validation['infeasible_periods'][:10]:  # 最初の10件のみ表示
-                        st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
-                        for issue in period['issues']:
-                            st.write(f"  - {issue}")
-                    
-                    if len(validation['infeasible_periods']) > 10:
-                        st.write(f"... 他{len(validation['infeasible_periods']) - 10}件")
+        if validation['infeasible_periods']:
+            with st.expander(f"⚠️ 問題期間の詳細 ({len(validation['infeasible_periods'])}件)"):
+                    # 実現不可能期間の表示
+
+            # 予備力警告期間の詳細表示（新規追加）
+                if 'reserve_warnings' in validation and validation['reserve_warnings']:
+                    with st.expander(f"⚠️ 予備力不足期間の詳細 ({len(validation['reserve_warnings'])}件)"):
+                        for period in validation['reserve_warnings'][:15]:  # 最初の15件のみ表示
+                            st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
+                        for warning in period['warnings']:
+                            st.write(f"  - {warning}")
+                        
+        if len(validation['reserve_warnings']) > 15:
+                st.write(f"... 他{len(validation['reserve_warnings']) - 15}件")
         
         if st.button("🔍 詳細レポートをプレビュー", use_container_width=True):
             with st.spinner("レポート生成中..."):
