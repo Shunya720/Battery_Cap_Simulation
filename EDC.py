@@ -577,18 +577,21 @@ class UnitCommitmentSolver:
                     target_flags[j] = 1
                     step_debug['actions'].append(f"{gen.name}: {start_reason}")
             
-            # 初回断面の処理
-            if i == 0:
-                for j in range(gen_count):
-                    if sorted_generators[j].is_must_run:
-                        output_flags[j, i] = 1
-                        prev_flags[j] = 1
-                    else:
-                        output_flags[j, i] = target_flags[j]
-                        prev_flags[j] = target_flags[j]
-                        if target_flags[j] == 1:
-                            last_start[j] = i
-                continue
+                # 初回断面の処理（起動時間無視）
+                    if i == 0:
+                                for j in range(gen_count):
+                                    if sorted_generators[j].is_must_run:
+                                        output_flags[j, i] = 1
+                                        prev_flags[j] = 1
+                                    elif target_flags[j] == 1:
+                                        # 初期断面では起動時間を無視して即座に運転状態にする
+                                        output_flags[j, i] = 1
+                                        prev_flags[j] = 1
+                                        last_start[j] = i
+                                    else:
+                                        output_flags[j, i] = 0
+                                        prev_flags[j] = 0
+                                continue
             
             # === 解列判定処理 ===
             final_flags = target_flags.copy()
