@@ -578,7 +578,7 @@ class UnitCommitmentSolver:
                     step_debug['actions'].append(f"{gen.name}: {start_reason}")
             
                 # 初回断面の処理（起動時間無視）
-                    if i == 0:
+                if i == 0:
                                 for j in range(gen_count):
                                     if sorted_generators[j].is_must_run:
                                         output_flags[j, i] = 1
