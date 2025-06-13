@@ -363,12 +363,12 @@ class UnitCommitmentSolver:
                 'infeasible_periods': [],
                 'reserve_warnings': [],  # 予備力警告を追加
                 'statistics': {
-                    'total_periods': len(demand_data),
-                    'feasible_periods': 0,
-                    'min_output_violations': 0,
-                    'capacity_shortages': 0,
-                    'upper_reserve_shortages': 0,  # 上予備力不足
-                    'lower_reserve_shortages': 0   # 下予備力不足
+                'total_periods': len(demand_data),
+                'feasible_periods': 0,
+                'min_output_violations': 0,
+                'capacity_shortages': 0,
+                'upper_reserve_shortages': 0,  # 上予備力不足
+                'lower_reserve_shortages': 0   # 下予備力不足
                 }
             }
 
