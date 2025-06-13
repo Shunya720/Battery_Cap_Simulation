@@ -1396,8 +1396,8 @@ def main():
                     heat_rate_b=heat_rate_b,
                     heat_rate_c=heat_rate_c,
                     fuel_price=fuel_price,
-                    startup_cost=startup_cost,      # 追加
-                    shutdown_cost=shutdown_cost     # 追加
+                    startup_cost=startup_cost,
+                    shutdown_cost=shutdown_cost
                 )
                 generators_config.append(generator)
     
@@ -1465,7 +1465,7 @@ def main():
                 fig_uc = create_unit_commitment_chart(uc_result)
                 st.plotly_chart(fig_uc, use_container_width=True)
 
-            # 最小台数構成分析
+                # 最小台数構成分析
                 st.subheader("⚙️ 最小台数構成分析")
                 
                 running_units_per_time = []
@@ -1521,10 +1521,10 @@ def main():
                     with col2:
                         st.metric("総停止費", f"{costs.get('total_shutdown_cost', 0):.0f} 円")
                         st.metric("総コスト", f"{costs['total_cost']:.0f} 円")
-                    with col3:                                    # 追加
-                        st.metric("平均コスト", f"{costs['average_cost_per_hour']:.0f} 円/時")  # 追加
-                        fuel_ratio = (costs.get('total_fuel_cost', 0) / costs['total_cost']) * 100 if costs['total_cost'] > 0 else 0  # 追加
-                        st.metric("燃料費比率", f"{fuel_ratio:.1f}%")  # 追加
+                    with col3:
+                        st.metric("平均コスト", f"{costs['average_cost_per_hour']:.0f} 円/時")
+                        fuel_ratio = (costs.get('total_fuel_cost', 0) / costs['total_cost']) * 100 if costs['total_cost'] > 0 else 0
+                        st.metric("燃料費比率", f"{fuel_ratio:.1f}%")
         else:
             # 構成計算結果のみ
             fig_uc = create_unit_commitment_chart(uc_result)
@@ -1583,179 +1583,26 @@ def main():
         stats_df = pd.DataFrame(stats_data)
         st.dataframe(stats_df, use_container_width=True)
         
-        # デバッグ情報表示
-        if st.checkbox("🔍 詳細計算ログを表示"):
-            st.subheader("📝 計算プロセス詳細")
-            
-            # 時間範囲選択
-            start_hour = st.number_input("開始時刻", min_value=0, max_value=23, value=0, step=1, key="debug_start_hour")
-            end_hour = st.number_input("終了時刻", min_value=0, max_value=23, value=23, step=1, key="debug_end_hour")
-            
-            debug_info = uc_result.get('debug_info', [])
-            
-            for debug_step in debug_info:
-                hour = debug_step['hour']
-                if start_hour <= hour <= end_hour and debug_step['actions']:
-                    with st.expander(f"⏰ {hour:.2f}時 (ステップ {debug_step['time_step']})"):
-                        st.write(f"**需要**: {debug_step['demand']:.0f} kW")
-                        st.write(f"**将来需要**: {debug_step['future_demand']:.0f} kW")
-                        
-                        # 最小構成分析
-                        if 'capacity_analysis' in debug_step:
-                            analysis = debug_step['capacity_analysis']
-                            if 'required_units' in analysis:
-                                st.write(f"**最小構成**: {', '.join(analysis['required_units'])}")
-                        
-                        # 経済配分結果があればλ値も表示
-                        if 'ed_result' in st.session_state and st.session_state.ed_result:
-                            lambda_val = st.session_state.ed_result['lambda_values'][debug_step['time_step']]
-                            st.write(f"**λ値**: {lambda_val:.3f}")
-                        
-                        st.write("**アクション**:")
-                        for action in debug_step['actions']:
-                            st.write(f"- {action}")
-        
-        # 計算パラメータ表示
-        with st.expander("⚙️ 計算パラメータ"):
-            margins = uc_result.get('margins', {})
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**構成計算パラメータ**")
-                st.write(f"- DG起動マージン: {margins.get('dg_start', 0)*100:.1f}%")
-                st.write(f"- GT起動マージン: {margins.get('gt_start', 0)*100:.1f}%")
-                st.write(f"- DG解列マージン: {margins.get('dg_stop', 0)*100:.1f}%")
-                st.write(f"- GT解列マージン: {margins.get('gt_stop', 0)*100:.1f}%")
-            
-            with col2:
-                if 'ed_result' in st.session_state:
-                    st.write("**経済配分パラメータ**")
-                    st.write(f"- λ探索範囲: {st.session_state.ed_solver.lambda_min} - {st.session_state.ed_solver.lambda_max}")
-                    st.write(f"- λ許容誤差: {st.session_state.ed_solver.lambda_tolerance} kW")
-                    st.write(f"- 最大反復回数: {st.session_state.ed_solver.max_iterations}")
-        
-        # CSVダウンロード
-        st.subheader("💾 結果ダウンロード")
-        
-        # 結果をCSV形式で準備
-        time_labels = [f"{(i*15)//60:02d}:{(i*15)%60:02d}" for i in range(96)]
-        
-        # ダウンロードボタンのレイアウト
-        download_col1, download_col2, download_col3 = st.columns(3)
-        
-        if 'ed_result' in st.session_state and st.session_state.ed_result:
-            # 経済配分結果を含むCSV
-            ed_result = st.session_state.ed_result
-            
-            # 発電機出力データ
-            output_df = pd.DataFrame(ed_result['power_outputs'].T, columns=[gen.name for gen in generators])
-            output_df.insert(0, '時刻', time_labels)
-            output_df.insert(1, '需要', uc_result['demand_data'])
-            output_df.insert(2, 'λ値', ed_result['lambda_values'])
-            
-            # 発電機状態データ
-            status_df = pd.DataFrame(output_flags.T, columns=[f"{gen.name}_状態" for gen in generators])
-            
-            # 結合
-            result_df = pd.concat([output_df, status_df], axis=1)
-            
-            # 燃料費データ
-            if 'total_costs' in ed_result and 'individual_costs' in ed_result['total_costs']:
-                fuel_costs = ed_result['total_costs']['individual_costs']
-                fuel_df = pd.DataFrame(fuel_costs.T, columns=[f"{gen.name}_燃料費" for gen in generators])
-                result_df = pd.concat([result_df, fuel_df], axis=1)
-            
-            csv_buffer = io.StringIO()
-            result_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-            
-            with download_col1:
-                st.download_button(
-                    label="📥 経済配分結果CSV",
-                    data=csv_buffer.getvalue(),
-                    file_name="economic_dispatch_result.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # λ値のみのダウンロード
-            lambda_df = pd.DataFrame({
-                '時刻': time_labels,
-                'λ値': ed_result['lambda_values']
-            })
-            
-            lambda_buffer = io.StringIO()
-            lambda_df.to_csv(lambda_buffer, index=False, encoding='utf-8-sig')
-            
-            with download_col2:
-                st.download_button(
-                    label="📊 λ値データCSV",
-                    data=lambda_buffer.getvalue(),
-                    file_name="lambda_values.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # 詳細レポート
-            with download_col3:
-                detailed_report = generate_detailed_report(uc_result, ed_result)
-                st.download_button(
-                    label="📋 詳細レポート",
-                    data=detailed_report,
-                    file_name="detailed_report.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-        else:
-            # 構成計算結果のみ
-            output_df = pd.DataFrame(output_flags.T, columns=[gen.name for gen in generators])
-            output_df.insert(0, '時刻', time_labels)
-            output_df.insert(1, '需要', uc_result['demand_data'])
-            
-            csv_buffer = io.StringIO()
-            output_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-            
-            with download_col1:
-                st.download_button(
-                    label="📥 構成計算結果CSV",
-                    data=csv_buffer.getvalue(),
-                    file_name="unit_commitment_result.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # 詳細レポート（構成計算のみ）
-            with download_col2:
-                detailed_report = generate_detailed_report(uc_result)
-                st.download_button(
-                    label="📋 詳細レポート",
-                    data=detailed_report,
-                    file_name="detailed_report.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-        
-        # レポートプレビュー機能
-        st.subheader("📄 レポートプレビュー")
-        
         # 実現可能性検証結果の表示
         if 'feasibility_validation' in uc_result:
             validation = uc_result['feasibility_validation']
             
             st.subheader("🔍 構成計算実現可能性検証")
             
-# 全体結果
+            # 全体結果
             if validation['overall_feasible']:
                 st.success("✅ 全期間で実現可能な構成計算結果です")
             else:
                 st.error(f"❌ {len(validation['infeasible_periods'])}期間で実現不可能な構成があります")
             
             # 予備力警告の表示
-            if 'reserve_warnings' in validation and validation['reserve_warnings']:
+            if validation.get('reserve_warnings', []):
                 st.warning(f"⚠️ {len(validation['reserve_warnings'])}期間で予備力不足があります")
             
             # 統計情報
             stats = validation['statistics']
             
-            # 予備力統計の表示（新規追加）
+            # 予備力統計の表示
             if 'upper_reserve_shortages' in stats or 'lower_reserve_shortages' in stats:
                 st.subheader("🔋 予備力統計")
                 reserve_col1, reserve_col2, reserve_col3, reserve_col4 = st.columns(4)
@@ -1770,25 +1617,34 @@ def main():
                 with reserve_col4:
                     reserve_adequacy_rate = ((stats['total_periods'] - total_reserve_issues) / stats['total_periods']) * 100
                     st.metric("予備力充足率", f"{reserve_adequacy_rate:.1f}%")
-                st.metric("実現性指標", "良好" if stats['feasibility_rate'] > 95 else "要改善", 
-                         delta=f"{delta} 期間差")
+                    
+                # 実現性指標の表示
+                feasibility_status = "良好" if stats['feasibility_rate'] > 95 else "要改善"
+                st.metric("実現性指標", feasibility_status)
             
             # 問題期間の詳細表示
-        if validation['infeasible_periods']:
-            with st.expander(f"⚠️ 問題期間の詳細 ({len(validation['infeasible_periods'])}件)"):
-                    # 実現不可能期間の表示
+            if validation['infeasible_periods']:
+                with st.expander(f"⚠️ 問題期間の詳細 ({len(validation['infeasible_periods'])}件)"):
+                    for period in validation['infeasible_periods'][:10]:  # 最初の10件のみ表示
+                        st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
+                        for issue in period['issues']:
+                            st.write(f"  - {issue}")
+                    
+                    if len(validation['infeasible_periods']) > 10:
+                        st.write(f"... 他{len(validation['infeasible_periods']) - 10}件")
 
-            # 予備力警告期間の詳細表示（新規追加）
-                if 'reserve_warnings' in validation and validation['reserve_warnings']:
-                    with st.expander(f"⚠️ 予備力不足期間の詳細 ({len(validation['reserve_warnings'])}件)"):
-                        for period in validation['reserve_warnings'][:15]:  # 最初の15件のみ表示
-                            st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
+            # 予備力警告期間の詳細表示
+            if validation.get('reserve_warnings', []):
+                with st.expander(f"⚠️ 予備力不足期間の詳細 ({len(validation['reserve_warnings'])}件)"):
+                    for period in validation['reserve_warnings'][:10]:  # 最初の10件のみ表示
+                        st.write(f"**{period['hour']:.2f}時 (ステップ{period['time_step']})**: 需要{period['demand']:.0f}kW")
                         for warning in period['warnings']:
                             st.write(f"  - {warning}")
-                        
-        if len(validation['reserve_warnings']) > 15:
-                st.write(f"... 他{len(validation['reserve_warnings']) - 15}件")
+                    
+                    if len(validation['reserve_warnings']) > 10:
+                        st.write(f"... 他{len(validation['reserve_warnings']) - 10}件")
         
+        # レポートプレビュー
         if st.button("🔍 詳細レポートをプレビュー", use_container_width=True):
             with st.spinner("レポート生成中..."):
                 if 'ed_result' in st.session_state and st.session_state.ed_result:
@@ -1798,80 +1654,6 @@ def main():
                 
                 # レポートを表示
                 st.markdown(report_content)
-        
-        # サマリーメトリクス表示
-        st.subheader("📊 サマリーメトリクス")
-        
-        if 'ed_result' in st.session_state and st.session_state.ed_result:
-            metrics = create_summary_metrics(uc_result, st.session_state.ed_result)
-        else:
-            metrics = create_summary_metrics(uc_result)
-        
-        if metrics:
-            # KPIカード表示
-            kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
-            
-            with kpi_col1:
-                st.metric(
-                    label="需要ピーク", 
-                    value=f"{metrics['demand_max']:.0f} kW",
-                    delta=f"平均から +{metrics['demand_max'] - metrics['demand_avg']:.0f} kW"
-                )
-                st.metric(
-                    label="総発電容量", 
-                    value=f"{metrics['total_capacity']:.0f} kW"
-                )
-            
-            with kpi_col2:
-                st.metric(
-                    label="容量利用率", 
-                    value=f"{metrics['peak_utilization']:.1f}%"
-                )
-                st.metric(
-                    label="平均運転台数", 
-                    value=f"{metrics['avg_running_units']:.1f} 台"
-                )
-            
-            with kpi_col3:
-                if 'total_cost' in metrics:
-                    st.metric(
-                        label="総燃料費", 
-                        value=f"{metrics['total_cost']:,.0f} 円"
-                    )
-                    st.metric(
-                        label="発電コスト", 
-                        value=f"{metrics['avg_cost_per_kwh']:.2f} 円/kWh"
-                    )
-                else:
-                    st.metric(
-                        label="総運転時間", 
-                        value=f"{metrics['total_running_hours']:.1f} h"
-                    )
-                    st.metric(
-                        label="最小運転台数", 
-                        value=f"{metrics['min_running_units']} 台"
-                    )
-            
-            with kpi_col4:
-                if 'lambda_avg' in metrics:
-                    st.metric(
-                        label="平均λ値", 
-                        value=f"{metrics['lambda_avg']:.3f}"
-                    )
-                    st.metric(
-                        label="λ値変動幅", 
-                        value=f"{metrics['lambda_max'] - metrics['lambda_min']:.3f}"
-                    )
-                else:
-                    st.metric(
-                        label="最大運転台数", 
-                        value=f"{metrics['max_running_units']} 台"
-                    )
-                    efficiency = (1 - metrics['avg_running_units'] / len(generators)) * 100
-                    st.metric(
-                        label="構成効率", 
-                        value=f"{efficiency:.1f}%"
-                    )
 
 if __name__ == "__main__":
-    main()       
+    main()
