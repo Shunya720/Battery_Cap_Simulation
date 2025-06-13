@@ -969,12 +969,18 @@ def generate_detailed_report(uc_result: Dict, ed_result: Dict = None) -> str:
     # 経済配分結果がある場合
     if ed_result:
         total_cost = ed_result['total_costs']['total_cost']
+        total_fuel_cost = ed_result['total_costs'].get('total_fuel_cost', 0)      # 追加
+        total_startup_cost = ed_result['total_costs'].get('total_startup_cost', 0)  # 追加
+        total_shutdown_cost = ed_result['total_costs'].get('total_shutdown_cost', 0)  # 追加
         avg_cost_per_hour = ed_result['total_costs']['average_cost_per_hour']
         total_generation = np.sum(ed_result['power_outputs']) * 0.25  # kWh
         avg_cost_per_kwh = total_cost / total_generation if total_generation > 0 else 0
         
-        report.append(f"- **総燃料費**: {total_cost:,.0f} 円")
-        report.append(f"- **平均燃料費**: {avg_cost_per_hour:,.0f} 円/時")
+        report.append(f"- **総コスト**: {total_cost:,.0f} 円")                    # 変更
+        report.append(f"  - 燃料費: {total_fuel_cost:,.0f} 円 ({total_fuel_cost/total_cost*100:.1f}%)")    # 追加
+        report.append(f"  - 起動費: {total_startup_cost:,.0f} 円 ({total_startup_cost/total_cost*100:.1f}%)")  # 追加
+        report.append(f"  - 停止費: {total_shutdown_cost:,.0f} 円 ({total_shutdown_cost/total_cost*100:.1f}%)")  # 追加
+        report.append(f"- **平均コスト**: {avg_cost_per_hour:,.0f} 円/時")        # 変更
         report.append(f"- **総発電量**: {total_generation:,.0f} kWh")
         report.append(f"- **平均発電コスト**: {avg_cost_per_kwh:.2f} 円/kWh")
     
@@ -1517,7 +1523,9 @@ def main():
                     heat_rate_a=heat_rate_a,
                     heat_rate_b=heat_rate_b,
                     heat_rate_c=heat_rate_c,
-                    fuel_price=fuel_price
+                    fuel_price=fuel_price,
+                    startup_cost=startup_cost,      # 追加
+                    shutdown_cost=shutdown_cost     # 追加
                 )
                 generators_config.append(generator)
     
@@ -1632,15 +1640,19 @@ def main():
                 # 燃料費統計
                 if 'total_costs' in ed_result:
                     costs = ed_result['total_costs']
-                    st.subheader("🔥 燃料費統計")
+                    st.subheader("🔥 コスト統計")
                     
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("総燃料費", f"{costs.get('total_fuel_cost', 0):.0f} 円")
-                    st.metric("総起動費", f"{costs.get('total_startup_cost', 0):.0f} 円")
-                with col2:
-                    st.metric("総停止費", f"{costs.get('total_shutdown_cost', 0):.0f} 円")
-                    st.metric("総コスト", f"{costs['total_cost']:.0f} 円")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("総燃料費", f"{costs.get('total_fuel_cost', 0):.0f} 円")
+                        st.metric("総起動費", f"{costs.get('total_startup_cost', 0):.0f} 円")
+                    with col2:
+                        st.metric("総停止費", f"{costs.get('total_shutdown_cost', 0):.0f} 円")
+                        st.metric("総コスト", f"{costs['total_cost']:.0f} 円")
+                    with col3:                                    # 追加
+                        st.metric("平均コスト", f"{costs['average_cost_per_hour']:.0f} 円/時")  # 追加
+                        fuel_ratio = (costs.get('total_fuel_cost', 0) / costs['total_cost']) * 100 if costs['total_cost'] > 0 else 0  # 追加
+                        st.metric("燃料費比率", f"{fuel_ratio:.1f}%")  # 追加
         else:
             # 構成計算結果のみ
             fig_uc = create_unit_commitment_chart(uc_result)
