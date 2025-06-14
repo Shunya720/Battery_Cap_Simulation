@@ -1,0 +1,229 @@
+{% extends 'power_optimizer/base.html' %}
+
+{% block title %}計算結果一覧 - 発電機構成計算ツール{% endblock %}
+
+{% block page_header %}
+<div class="main-header">
+    <h1><i class="fas fa-history me-3"></i>計算結果一覧</h1>
+    <p class="lead mb-0">過去の計算結果を確認・比較</p>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-list me-2"></i>計算履歴</h5>
+                <div>
+                    <a href="{% url 'power_optimizer:calculation_execute' %}" class="btn btn-primary">
+                        <i class="fas fa-plus me-1"></i>新規計算
+                    </a>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                {% if calculations %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>計算名</th>
+                                    <th>計算方法</th>
+                                    <th>需要データ</th>
+                                    <th>使用発電機</th>
+                                    <th>総容量</th>
+                                    <th>推定コスト</th>
+                                    <th>実行日時</th>
+                                    <th>アクション</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for calc in calculations %}
+                                <tr>
+                                    <td>
+                                        <strong>{{ calc.name }}</strong>
+                                    </td>
+                                    <td>
+                                        {% if calc.result_summary.method == 'priority' %}
+                                            <span class="badge bg-primary">優先順位ベース</span>
+                                        {% elif calc.result_summary.method == 'economic' %}
+                                            <span class="badge bg-success">経済性重視</span>
+                                        {% elif calc.result_summary.method == 'balanced' %}
+                                            <span class="badge bg-warning">バランス型</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">不明</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="text-primary">{{ calc.demand_data.name }}</span>
+                                        <br>
+                                        <small class="text-muted">
+                                            {{ calc.demand_data.base_demand|floatformat:0 }}-{{ calc.demand_data.peak_demand|floatformat:0 }}kW
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info">{{ calc.used_generators }}台</span>
+                                    </td>
+                                    <td>
+                                        {{ calc.total_capacity|floatformat:0 }} kW
+                                    </td>
+                                    <td>
+                                        <strong>{{ calc.estimated_cost|floatformat:0 }}</strong> 円/日
+                                        <br>
+                                        <small class="text-muted">
+                                            {{ calc.estimated_cost|floatformat:0|div:24 }} 円/時
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">
+                                            {{ calc.created_at|date:"Y/m/d H:i" }}
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group" role="group">
+                                            <a href="{% url 'power_optimizer:calculation_detail' calc.pk %}" 
+                                               class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-eye me-1"></i>詳細
+                                            </a>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" 
+                                                    data-bs-toggle="dropdown">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li>
+                                                    <a class="dropdown-item" href="{% url 'power_optimizer:calculation_detail' calc.pk %}">
+                                                        <i class="fas fa-chart-bar me-1"></i>チャート表示
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a class="dropdown-item" href="#" onclick="duplicateCalculation({{ calc.pk }})">
+                                                        <i class="fas fa-copy me-1"></i>複製
+                                                    </a>
+                                                </li>
+                                                <li><hr class="dropdown-divider"></li>
+                                                <li>
+                                                    <a class="dropdown-item text-danger" href="#" 
+                                                       onclick="deleteCalculation({{ calc.pk }})"
+                                                       data-confirm="この計算結果を削除しますか？">
+                                                        <i class="fas fa-trash me-1"></i>削除
+                                                    </a>
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- ページネーション -->
+                    {% if page_obj.has_other_pages %}
+                        <nav aria-label="計算結果ページネーション">
+                            <ul class="pagination justify-content-center">
+                                {% if page_obj.has_previous %}
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">前へ</a>
+                                    </li>
+                                {% endif %}
+                                
+                                <li class="page-item active">
+                                    <span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+                                </li>
+                                
+                                {% if page_obj.has_next %}
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">次へ</a>
+                                    </li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    {% endif %}
+                    
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-calculator fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">計算結果がありません</h5>
+                        <p class="text-muted">最初の計算を実行してみましょう。</p>
+                        <a href="{% url 'power_optimizer:calculation_execute' %}" class="btn btn-primary">
+                            <i class="fas fa-play me-2"></i>計算を実行
+                        </a>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- 統計情報 -->
+        {% if calculations %}
+        <div class="row mt-4">
+            <div class="col-md-3">
+                <div class="metric-card">
+                    <h6 class="text-primary">総計算回数</h6>
+                    <h3>{{ calculations|length }}</h3>
+                    <small class="text-muted">回</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card">
+                    <h6 class="text-success">今日の計算</h6>
+                    <h3>{% now "Y-m-d" as today %}{% for calc in calculations %}{% if calc.created_at|date:"Y-m-d" == today %}1{% endif %}{% endfor %}</h3>
+                    <small class="text-muted">回</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card">
+                    <h6 class="text-warning">平均コスト</h6>
+                    {% if calculations %}
+                        {% for calc in calculations %}{{ calc.estimated_cost|add:0 }}{% endfor %} <!-- 簡易平均計算 -->
+                    {% endif %}
+                    <h3>{% widthratio calculations.0.estimated_cost 1 1 %}</h3>
+                    <small class="text-muted">円/日</small>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="metric-card">
+                    <h6 class="text-info">最新計算</h6>
+                    <h3>{{ calculations.0.created_at|timesince }}</h3>
+                    <small class="text-muted">前</small>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function duplicateCalculation(calcId) {
+    // 複製機能は後で実装
+    alert('計算結果の複製機能は実装中です。');
+}
+
+function deleteCalculation(calcId) {
+    if (confirm('この計算結果を削除しますか？')) {
+        // 削除機能は後で実装
+        alert('削除機能は実装中です。');
+    }
+}
+
+$(document).ready(function() {
+    // テーブル行のクリックで詳細ページに移動
+    $('.table tbody tr').on('click', function(e) {
+        // ボタンやドロップダウンがクリックされた場合は無視
+        if ($(e.target).closest('.btn, .dropdown').length === 0) {
+            const detailUrl = $(this).find('a[href*="calculations"]').attr('href');
+            if (detailUrl) {
+                window.location.href = detailUrl;
+            }
+        }
+    });
+    
+    // 行のホバー効果
+    $('.table tbody tr').on('mouseenter', function() {
+        $(this).css('cursor', 'pointer');
+    });
+});
+</script>
+{% endblock %}
