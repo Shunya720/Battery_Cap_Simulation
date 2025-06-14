@@ -1,229 +1,1077 @@
-{% extends 'power_optimizer/base.html' %}
+import dash
+from dash import dcc, html, Input, Output, State, callback_context, dash_table
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import pandas as pd
+import numpy as np
+import base64
+import io
+import json
+from typing import List, Dict, Tuple
 
-{% block title %}計算結果一覧 - 発電機構成計算ツール{% endblock %}
+# Dashアプリケーション初期化
+app = dash.Dash(__name__)
+app.title = "発電機構成計算ツール"
 
-{% block page_header %}
-<div class="main-header">
-    <h1><i class="fas fa-history me-3"></i>計算結果一覧</h1>
-    <p class="lead mb-0">過去の計算結果を確認・比較</p>
-</div>
-{% endblock %}
-
-{% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-list me-2"></i>計算履歴</h5>
-                <div>
-                    <a href="{% url 'power_optimizer:calculation_execute' %}" class="btn btn-primary">
-                        <i class="fas fa-plus me-1"></i>新規計算
-                    </a>
-                </div>
-            </div>
-            
-            <div class="card-body">
-                {% if calculations %}
-                    <div class="table-responsive">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>計算名</th>
-                                    <th>計算方法</th>
-                                    <th>需要データ</th>
-                                    <th>使用発電機</th>
-                                    <th>総容量</th>
-                                    <th>推定コスト</th>
-                                    <th>実行日時</th>
-                                    <th>アクション</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for calc in calculations %}
-                                <tr>
-                                    <td>
-                                        <strong>{{ calc.name }}</strong>
-                                    </td>
-                                    <td>
-                                        {% if calc.result_summary.method == 'priority' %}
-                                            <span class="badge bg-primary">優先順位ベース</span>
-                                        {% elif calc.result_summary.method == 'economic' %}
-                                            <span class="badge bg-success">経済性重視</span>
-                                        {% elif calc.result_summary.method == 'balanced' %}
-                                            <span class="badge bg-warning">バランス型</span>
-                                        {% else %}
-                                            <span class="badge bg-secondary">不明</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <span class="text-primary">{{ calc.demand_data.name }}</span>
-                                        <br>
-                                        <small class="text-muted">
-                                            {{ calc.demand_data.base_demand|floatformat:0 }}-{{ calc.demand_data.peak_demand|floatformat:0 }}kW
-                                        </small>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-info">{{ calc.used_generators }}台</span>
-                                    </td>
-                                    <td>
-                                        {{ calc.total_capacity|floatformat:0 }} kW
-                                    </td>
-                                    <td>
-                                        <strong>{{ calc.estimated_cost|floatformat:0 }}</strong> 円/日
-                                        <br>
-                                        <small class="text-muted">
-                                            {{ calc.estimated_cost|floatformat:0|div:24 }} 円/時
-                                        </small>
-                                    </td>
-                                    <td>
-                                        <small class="text-muted">
-                                            {{ calc.created_at|date:"Y/m/d H:i" }}
-                                        </small>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group" role="group">
-                                            <a href="{% url 'power_optimizer:calculation_detail' calc.pk %}" 
-                                               class="btn btn-sm btn-outline-primary">
-                                                <i class="fas fa-eye me-1"></i>詳細
-                                            </a>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" 
-                                                    data-bs-toggle="dropdown">
-                                                <i class="fas fa-ellipsis-v"></i>
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li>
-                                                    <a class="dropdown-item" href="{% url 'power_optimizer:calculation_detail' calc.pk %}">
-                                                        <i class="fas fa-chart-bar me-1"></i>チャート表示
-                                                    </a>
-                                                </li>
-                                                <li>
-                                                    <a class="dropdown-item" href="#" onclick="duplicateCalculation({{ calc.pk }})">
-                                                        <i class="fas fa-copy me-1"></i>複製
-                                                    </a>
-                                                </li>
-                                                <li><hr class="dropdown-divider"></li>
-                                                <li>
-                                                    <a class="dropdown-item text-danger" href="#" 
-                                                       onclick="deleteCalculation({{ calc.pk }})"
-                                                       data-confirm="この計算結果を削除しますか？">
-                                                        <i class="fas fa-trash me-1"></i>削除
-                                                    </a>
-                                                </li>
-                                            </ul>
-                                        </div>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <!-- ページネーション -->
-                    {% if page_obj.has_other_pages %}
-                        <nav aria-label="計算結果ページネーション">
-                            <ul class="pagination justify-content-center">
-                                {% if page_obj.has_previous %}
-                                    <li class="page-item">
-                                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">前へ</a>
-                                    </li>
-                                {% endif %}
-                                
-                                <li class="page-item active">
-                                    <span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
-                                </li>
-                                
-                                {% if page_obj.has_next %}
-                                    <li class="page-item">
-                                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">次へ</a>
-                                    </li>
-                                {% endif %}
-                            </ul>
-                        </nav>
-                    {% endif %}
-                    
-                {% else %}
-                    <div class="text-center py-5">
-                        <i class="fas fa-calculator fa-3x text-muted mb-3"></i>
-                        <h5 class="text-muted">計算結果がありません</h5>
-                        <p class="text-muted">最初の計算を実行してみましょう。</p>
-                        <a href="{% url 'power_optimizer:calculation_execute' %}" class="btn btn-primary">
-                            <i class="fas fa-play me-2"></i>計算を実行
-                        </a>
-                    </div>
-                {% endif %}
-            </div>
-        </div>
-        
-        <!-- 統計情報 -->
-        {% if calculations %}
-        <div class="row mt-4">
-            <div class="col-md-3">
-                <div class="metric-card">
-                    <h6 class="text-primary">総計算回数</h6>
-                    <h3>{{ calculations|length }}</h3>
-                    <small class="text-muted">回</small>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="metric-card">
-                    <h6 class="text-success">今日の計算</h6>
-                    <h3>{% now "Y-m-d" as today %}{% for calc in calculations %}{% if calc.created_at|date:"Y-m-d" == today %}1{% endif %}{% endfor %}</h3>
-                    <small class="text-muted">回</small>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="metric-card">
-                    <h6 class="text-warning">平均コスト</h6>
-                    {% if calculations %}
-                        {% for calc in calculations %}{{ calc.estimated_cost|add:0 }}{% endfor %} <!-- 簡易平均計算 -->
-                    {% endif %}
-                    <h3>{% widthratio calculations.0.estimated_cost 1 1 %}</h3>
-                    <small class="text-muted">円/日</small>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="metric-card">
-                    <h6 class="text-info">最新計算</h6>
-                    <h3>{{ calculations.0.created_at|timesince }}</h3>
-                    <small class="text-muted">前</small>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-function duplicateCalculation(calcId) {
-    // 複製機能は後で実装
-    alert('計算結果の複製機能は実装中です。');
-}
-
-function deleteCalculation(calcId) {
-    if (confirm('この計算結果を削除しますか？')) {
-        // 削除機能は後で実装
-        alert('削除機能は実装中です。');
-    }
-}
-
-$(document).ready(function() {
-    // テーブル行のクリックで詳細ページに移動
-    $('.table tbody tr').on('click', function(e) {
-        // ボタンやドロップダウンがクリックされた場合は無視
-        if ($(e.target).closest('.btn, .dropdown').length === 0) {
-            const detailUrl = $(this).find('a[href*="calculations"]').attr('href');
-            if (detailUrl) {
-                window.location.href = detailUrl;
-            }
-        }
-    });
+# カスタムCSS
+app.layout = html.Div([
+    dcc.Store(id='generators-store'),
+    dcc.Store(id='demand-store'),
+    dcc.Store(id='uc-result-store'),
+    dcc.Store(id='ed-result-store'),
+    dcc.Store(id='solver-config-store', data={
+        'margin_dg': 0.1,
+        'margin_gt': 0.15,
+        'stop_margin_dg': 0.05,
+        'stop_margin_gt': 0.08,
+        'lambda_min': 0.0,
+        'lambda_max': 100.0,
+        'lambda_tolerance': 0.001
+    }),
     
-    // 行のホバー効果
-    $('.table tbody tr').on('mouseenter', function() {
-        $(this).css('cursor', 'pointer');
-    });
-});
-</script>
-{% endblock %}
+    # ヘッダー
+    html.Div([
+        html.H1("⚡ 発電機構成計算ツール", 
+                style={'text-align': 'center', 'color': 'white', 'margin': '0'}),
+    ], style={
+        'background': 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
+        'padding': '2rem',
+        'border-radius': '10px',
+        'margin-bottom': '2rem'
+    }),
+    
+    # メインコンテンツ
+    html.Div([
+        # サイドバー
+        html.Div([
+            html.H3("⚙️ 計算設定", style={'margin-bottom': '1rem'}),
+            
+            # 構成計算設定
+            html.H4("📋 構成計算設定"),
+            html.Label("DGマージン率 (%)"),
+            dcc.Slider(id='margin-dg-slider', min=0, max=30, value=10, step=1,
+                      marks={i: f'{i}%' for i in range(0, 31, 5)},
+                      tooltip={"placement": "bottom", "always_visible": True}),
+            
+            html.Label("GTマージン率 (%)"),
+            dcc.Slider(id='margin-gt-slider', min=0, max=30, value=15, step=1,
+                      marks={i: f'{i}%' for i in range(0, 31, 5)},
+                      tooltip={"placement": "bottom", "always_visible": True}),
+            
+            html.Label("DG解列マージン率 (%)"),
+            dcc.Slider(id='stop-margin-dg-slider', min=0, max=20, value=5, step=1,
+                      marks={i: f'{i}%' for i in range(0, 21, 5)},
+                      tooltip={"placement": "bottom", "always_visible": True}),
+            
+            html.Label("GT解列マージン率 (%)"),
+            dcc.Slider(id='stop-margin-gt-slider', min=0, max=20, value=8, step=1,
+                      marks={i: f'{i}%' for i in range(0, 21, 5)},
+                      tooltip={"placement": "bottom", "always_visible": True}),
+            
+            html.Hr(),
+            
+            # 経済配分設定
+            html.H4("⚡ 経済配分設定"),
+            html.Label("λ最小値"),
+            dcc.Input(id='lambda-min-input', type='number', value=0.0, step=1.0),
+            
+            html.Label("λ最大値"),
+            dcc.Input(id='lambda-max-input', type='number', value=100.0, step=1.0),
+            
+            html.Label("λ許容誤差 (kW)"),
+            dcc.Input(id='lambda-tolerance-input', type='number', value=0.001, step=0.001),
+            
+        ], style={
+            'width': '25%',
+            'float': 'left',
+            'padding': '1rem',
+            'background': '#f8f9fa',
+            'border-radius': '10px',
+            'margin-right': '2%'
+        }),
+        
+        # メインコンテンツエリア
+        html.Div([
+            # 需要データアップロード
+            html.Div([
+                html.H2("📊 需要予測データアップロード"),
+                dcc.Upload(
+                    id='upload-demand',
+                    children=html.Div([
+                        'ドラッグ&ドロップまたはクリックして需要予測CSVファイルを選択'
+                    ]),
+                    style={
+                        'width': '100%',
+                        'height': '60px',
+                        'lineHeight': '60px',
+                        'borderWidth': '1px',
+                        'borderStyle': 'dashed',
+                        'borderRadius': '5px',
+                        'textAlign': 'center',
+                        'margin': '10px'
+                    },
+                    multiple=False
+                ),
+                html.Div(id='demand-upload-status'),
+                html.Div(id='demand-preview'),
+            ], style={'margin-bottom': '2rem'}),
+            
+            # 発電機設定
+            html.Div([
+                html.H2("🔧 発電機設定"),
+                html.Label("発電機台数"),
+                dcc.Input(id='num-generators-input', type='number', value=8, min=1, max=20),
+                html.Br(), html.Br(),
+                html.Button("発電機設定テーブルを生成", id='generate-gen-table-btn', 
+                           style={'margin-bottom': '1rem'}),
+                html.Div(id='generator-config-table'),
+                html.Button("発電機設定を保存", id='save-generators-btn', 
+                           style={'margin-top': '1rem', 'background': '#28a745', 'color': 'white'}),
+                html.Div(id='generator-save-status'),
+            ], style={'margin-bottom': '2rem'}),
+            
+            # 計算実行
+            html.Div([
+                html.H2("⚡ 構成計算・経済配分実行"),
+                html.Div([
+                    html.Button("🔧 構成計算のみ実行", id='run-uc-btn', 
+                               style={'margin-right': '1rem', 'background': '#6c757d', 'color': 'white'}),
+                    html.Button("🚀 構成計算＋経済配分実行", id='run-both-btn',
+                               style={'background': '#007bff', 'color': 'white'}),
+                ]),
+                html.Div(id='calculation-status'),
+            ], style={'margin-bottom': '2rem'}),
+            
+            # 結果表示
+            html.Div([
+                html.H2("📈 計算結果"),
+                dcc.Tabs(id='result-tabs', value='uc-tab', children=[
+                    dcc.Tab(label='📊 構成計算結果', value='uc-tab'),
+                    dcc.Tab(label='⚡ 経済配分結果', value='ed-tab'),
+                    dcc.Tab(label='📊 統計情報', value='stats-tab'),
+                ]),
+                html.Div(id='result-content'),
+            ], id='results-section', style={'display': 'none'}),
+            
+        ], style={'width': '73%', 'float': 'right'}),
+        
+    ], style={'clear': 'both', 'margin': '0'}),
+    
+], style={'padding': '1rem', 'font-family': 'Arial, sans-serif'})
+
+# 発電機設定のデフォルト値
+def get_default_generator_config(index: int) -> dict:
+    """デフォルト発電機設定を取得"""
+    defaults = {
+        0: {"name": "DG3", "type": "DG", "min": 5000, "max": 10000, "priority": 1, 
+            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420,
+            "startup_cost": 25893, "shutdown_cost": 42084},
+        1: {"name": "DG4", "type": "DG", "min": 5000, "max": 10000, "priority": 2, 
+            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103,
+            "startup_cost": 23116, "shutdown_cost": 50116},
+        2: {"name": "DG5", "type": "DG", "min": 7500, "max": 15000, "priority": 3, 
+            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300,
+            "startup_cost": 50630, "shutdown_cost": 65729},
+        3: {"name": "DG6", "type": "DG", "min": 6000, "max": 12000, "priority": 4, 
+            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216,
+            "startup_cost": 13580, "shutdown_cost": 13097},
+        4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
+            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612,
+            "startup_cost": 13580, "shutdown_cost": 13097},
+        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643},
+        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643},
+        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
+            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
+            "startup_cost": 12748, "shutdown_cost": 26643}
+    }
+    
+    if index in defaults:
+        return defaults[index]
+    else:
+        return {"name": f"発電機{index+1}", "type": "DG", "min": 1000, "max": 5000, "priority": index+1,
+                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300,
+                "startup_cost": 10000, "shutdown_cost": 10000}
+
+# コールバック: 設定値の更新
+@app.callback(
+    Output('solver-config-store', 'data'),
+    [Input('margin-dg-slider', 'value'),
+     Input('margin-gt-slider', 'value'),
+     Input('stop-margin-dg-slider', 'value'),
+     Input('stop-margin-gt-slider', 'value'),
+     Input('lambda-min-input', 'value'),
+     Input('lambda-max-input', 'value'),
+     Input('lambda-tolerance-input', 'value')],
+    [State('solver-config-store', 'data')]
+)
+def update_solver_config(margin_dg, margin_gt, stop_margin_dg, stop_margin_gt,
+                        lambda_min, lambda_max, lambda_tolerance, current_config):
+    """設定値を更新"""
+    return {
+        'margin_dg': margin_dg / 100 if margin_dg is not None else current_config['margin_dg'],
+        'margin_gt': margin_gt / 100 if margin_gt is not None else current_config['margin_gt'],
+        'stop_margin_dg': stop_margin_dg / 100 if stop_margin_dg is not None else current_config['stop_margin_dg'],
+        'stop_margin_gt': stop_margin_gt / 100 if stop_margin_gt is not None else current_config['stop_margin_gt'],
+        'lambda_min': lambda_min if lambda_min is not None else current_config['lambda_min'],
+        'lambda_max': lambda_max if lambda_max is not None else current_config['lambda_max'],
+        'lambda_tolerance': lambda_tolerance if lambda_tolerance is not None else current_config['lambda_tolerance']
+    }
+
+# コールバック: 需要データアップロード
+@app.callback(
+    [Output('demand-store', 'data'),
+     Output('demand-upload-status', 'children'),
+     Output('demand-preview', 'children')],
+    [Input('upload-demand', 'contents')],
+    [State('upload-demand', 'filename')]
+)
+def upload_demand_data(contents, filename):
+    """需要データをアップロード"""
+    if contents is None:
+        return None, "", ""
+    
+    try:
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        
+        # エンコーディング自動検出
+        encodings = ['utf-8', 'shift-jis', 'cp932', 'euc-jp', 'iso-2022-jp']
+        df = None
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(io.StringIO(decoded.decode(encoding)))
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if df is None:
+            return None, html.Div("❌ サポートされているエンコーディングで読み込めませんでした", 
+                                 style={'color': 'red'}), ""
+        
+        if len(df.columns) < 2:
+            return None, html.Div("❌ CSVファイルに最低2列（時刻、需要）が必要です", 
+                                 style={'color': 'red'}), ""
+        
+        if len(df) < 96:
+            return None, html.Div(f"❌ データが96ステップ未満です（現在: {len(df)}ステップ）", 
+                                 style={'color': 'red'}), ""
+        
+        # 需要データを数値に変換
+        demand_column = df.columns[1]  # 2列目を需要データとして使用
+        demand_values = pd.to_numeric(df[demand_column], errors='coerce').values[:96]
+        
+        valid_count = np.sum(~np.isnan(demand_values))
+        
+        # プレビュー作成
+        preview_df = df.head(10)
+        preview_table = dash_table.DataTable(
+            data=preview_df.to_dict('records'),
+            columns=[{"name": i, "id": i} for i in preview_df.columns],
+            style_cell={'textAlign': 'left'},
+            style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'}
+        )
+        
+        # 統計情報
+        valid_demands = demand_values[~np.isnan(demand_values)]
+        stats = html.Div([
+            html.H4("需要データ統計"),
+            html.P(f"最小値: {valid_demands.min():.0f} kW"),
+            html.P(f"平均値: {valid_demands.mean():.0f} kW"),
+            html.P(f"最大値: {valid_demands.max():.0f} kW"),
+            html.P(f"需要幅: {valid_demands.max() - valid_demands.min():.0f} kW"),
+        ])
+        
+        status = html.Div([
+            html.Div(f"✅ 需要予測データ読み込み完了（{valid_count}/96ステップ有効）", 
+                     style={'color': 'green'}),
+            stats
+        ])
+        
+        preview = html.Div([
+            html.H4("📋 データプレビュー"),
+            preview_table
+        ])
+        
+        return demand_values.tolist(), status, preview
+        
+    except Exception as e:
+        return None, html.Div(f"❌ ファイル読み込みエラー: {e}", style={'color': 'red'}), ""
+
+# コールバック: 発電機設定テーブル生成
+@app.callback(
+    Output('generator-config-table', 'children'),
+    [Input('generate-gen-table-btn', 'n_clicks')],
+    [State('num-generators-input', 'value')]
+)
+def generate_generator_table(n_clicks, num_generators):
+    """発電機設定テーブルを生成"""
+    if n_clicks is None or num_generators is None:
+        return ""
+    
+    # デフォルト設定でテーブルデータを作成
+    table_data = []
+    for i in range(num_generators):
+        config = get_default_generator_config(i)
+        table_data.append({
+            'ID': i,
+            '名前': config['name'],
+            'タイプ': config['type'],
+            '最小出力(kW)': config['min'],
+            '最大出力(kW)': config['max'],
+            '優先順位': config['priority'],
+            '最小運転時間(h)': 2.0,
+            '最小停止時間(h)': 1.0,
+            'マストラン': False,
+            'a係数': f"{config['heat_a']:.2e}",
+            'b係数': f"{config['heat_b']:.4f}",
+            'c係数': config['heat_c'],
+            '燃料単価(円/kL)': 60354,
+            '起動費(円)': config['startup_cost'],
+            '停止費(円)': config['shutdown_cost']
+        })
+    
+    table = dash_table.DataTable(
+        id='generator-table',
+        data=table_data,
+        columns=[
+            {"name": "ID", "id": "ID", "editable": False},
+            {"name": "名前", "id": "名前", "editable": True},
+            {"name": "タイプ", "id": "タイプ", "editable": True, "presentation": "dropdown"},
+            {"name": "最小出力(kW)", "id": "最小出力(kW)", "editable": True, "type": "numeric"},
+            {"name": "最大出力(kW)", "id": "最大出力(kW)", "editable": True, "type": "numeric"},
+            {"name": "優先順位", "id": "優先順位", "editable": True, "type": "numeric"},
+            {"name": "最小運転時間(h)", "id": "最小運転時間(h)", "editable": True, "type": "numeric"},
+            {"name": "最小停止時間(h)", "id": "最小停止時間(h)", "editable": True, "type": "numeric"},
+            {"name": "マストラン", "id": "マストラン", "editable": True, "type": "text"},
+            {"name": "a係数", "id": "a係数", "editable": True},
+            {"name": "b係数", "id": "b係数", "editable": True, "type": "numeric"},
+            {"name": "c係数", "id": "c係数", "editable": True, "type": "numeric"},
+            {"name": "燃料単価(円/kL)", "id": "燃料単価(円/kL)", "editable": True, "type": "numeric"},
+            {"name": "起動費(円)", "id": "起動費(円)", "editable": True, "type": "numeric"},
+            {"name": "停止費(円)", "id": "停止費(円)", "editable": True, "type": "numeric"},
+        ],
+        dropdown={
+            'タイプ': {
+                'options': [
+                    {'label': 'DG', 'value': 'DG'},
+                    {'label': 'GT', 'value': 'GT'}
+                ]
+            }
+        },
+        editable=True,
+        style_cell={'textAlign': 'left', 'fontSize': '12px'},
+        style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
+        style_table={'overflowX': 'auto'}
+    )
+    
+    return table
+
+# コールバック: 発電機設定保存
+@app.callback(
+    [Output('generators-store', 'data'),
+     Output('generator-save-status', 'children')],
+    [Input('save-generators-btn', 'n_clicks')],
+    [State('generator-table', 'data')]
+)
+def save_generators(n_clicks, table_data):
+    """発電機設定を保存"""
+    if n_clicks is None or table_data is None:
+        return None, ""
+    
+    try:
+        generators = []
+        for row in table_data:
+            # a係数の処理（文字列から数値に変換）
+            heat_a_str = str(row.get('a係数', '1e-06'))
+            if 'e' in heat_a_str.lower():
+                heat_a = float(heat_a_str)
+            else:
+                heat_a = float(heat_a_str)
+            
+            # マストランの処理
+            must_run_str = str(row.get('マストラン', 'False')).lower()
+            is_must_run = must_run_str in ['true', '1', 'yes', 'はい', 'on']
+            
+            generator = {
+                'name': row.get('名前', f"発電機{row.get('ID', 0)+1}"),
+                'unit_type': row.get('タイプ', 'DG'),
+                'min_output': float(row.get('最小出力(kW)', 1000)),
+                'max_output': float(row.get('最大出力(kW)', 5000)),
+                'priority': int(row.get('優先順位', 1)),
+                'min_run_time': float(row.get('最小運転時間(h)', 2.0)),
+                'min_stop_time': float(row.get('最小停止時間(h)', 1.0)),
+                'is_must_run': is_must_run,
+                'heat_rate_a': heat_a,
+                'heat_rate_b': float(row.get('b係数', 0.15)),
+                'heat_rate_c': float(row.get('c係数', 300)),
+                'fuel_price': float(row.get('燃料単価(円/kL)', 60354)),
+                'startup_cost': float(row.get('起動費(円)', 10000)),
+                'shutdown_cost': float(row.get('停止費(円)', 10000))
+            }
+            generators.append(generator)
+        
+        status = html.Div("✅ 発電機設定を保存しました", style={'color': 'green'})
+        return generators, status
+        
+    except Exception as e:
+        status = html.Div(f"❌ 発電機設定保存エラー: {e}", style={'color': 'red'})
+        return None, status
+
+# Unit Commitmentソルバー（簡略版）
+class SimpleUnitCommitmentSolver:
+    def __init__(self, config):
+        self.config = config
+    
+    def solve(self, generators, demand_data):
+        """簡略化された構成計算"""
+        time_steps = len(demand_data)
+        gen_count = len(generators)
+        
+        # 優先順位でソート
+        sorted_generators = sorted(generators, key=lambda x: x['priority'])
+        
+        # 出力フラグ初期化
+        output_flags = np.zeros((gen_count, time_steps), dtype=int)
+        
+        for t in range(time_steps):
+            demand = demand_data[t]
+            if np.isnan(demand):
+                continue
+            
+            # 必要な容量計算（マージン考慮）
+            required_capacity = demand * (1 + max(self.config['margin_dg'], self.config['margin_gt']))
+            
+            # 発電機を優先順位順に選択
+            cumulative_capacity = 0
+            
+            for i, gen in enumerate(sorted_generators):
+                if gen['is_must_run'] or cumulative_capacity < required_capacity:
+                    output_flags[i, t] = 1
+                    cumulative_capacity += gen['max_output']
+        
+        return {
+            'generators': sorted_generators,
+            'output_flags': output_flags.tolist(),  # numpy配列をリストに変換
+            'demand_data': demand_data,
+            'time_steps': time_steps
+        }
+
+# Economic Dispatchソルバー（簡略版）
+class SimpleEconomicDispatchSolver:
+    def __init__(self, config):
+        self.config = config
+    
+    def solve(self, uc_result):
+        """簡略化された経済配分計算"""
+        generators = uc_result['generators']
+        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
+        demand_data = uc_result['demand_data']
+        time_steps = uc_result['time_steps']
+        
+        gen_count = len(generators)
+        power_outputs = np.zeros((gen_count, time_steps))
+        lambda_values = np.zeros(time_steps)
+        
+        for t in range(time_steps):
+            demand = demand_data[t]
+            if np.isnan(demand):
+                continue
+            
+            # 運転中発電機を抽出
+            running_generators = []
+            for i, gen in enumerate(generators):
+                if output_flags[i, t] == 1:
+                    running_generators.append((i, gen))
+            
+            if not running_generators:
+                continue
+            
+            # 等配分方式（簡略化）
+            total_capacity = sum(gen['max_output'] for _, gen in running_generators)
+            
+            for i, gen in running_generators:
+                # 容量比例配分
+                allocation_ratio = gen['max_output'] / total_capacity
+                output = min(demand * allocation_ratio, gen['max_output'])
+                output = max(output, gen['min_output'])
+                power_outputs[i, t] = output
+            
+            # λ値計算（簡略化）
+            lambda_values[t] = 50.0  # 固定値
+        
+        # コスト計算
+        total_costs = self.calculate_costs(generators, power_outputs, output_flags)
+        
+        return {
+            'power_outputs': power_outputs.tolist(),  # numpy配列をリストに変換
+            'lambda_values': lambda_values.tolist(),  # numpy配列をリストに変換
+            'total_costs': total_costs
+        }
+    
+    def calculate_costs(self, generators, power_outputs, output_flags):
+        """コスト計算"""
+        time_steps = power_outputs.shape[1]
+        total_fuel_cost = 0
+        
+        for i, gen in enumerate(generators):
+            for t in range(time_steps):
+                if output_flags[i, t] == 1:
+                    power = power_outputs[i, t]
+                    # 燃料費計算
+                    fuel_consumption = (gen['heat_rate_a'] * power**2 + 
+                                      gen['heat_rate_b'] * power + 
+                                      gen['heat_rate_c'])
+                    cost = fuel_consumption * gen['fuel_price'] * 0.25
+                    total_fuel_cost += cost
+        
+        return {
+            'total_cost': total_fuel_cost,
+            'total_fuel_cost': total_fuel_cost,
+            'total_startup_cost': 0,
+            'total_shutdown_cost': 0,
+            'average_cost_per_hour': total_fuel_cost / 24
+        }
+
+# コールバック: 計算実行
+@app.callback(
+    [Output('uc-result-store', 'data'),
+     Output('ed-result-store', 'data'),
+     Output('calculation-status', 'children'),
+     Output('results-section', 'style')],
+    [Input('run-uc-btn', 'n_clicks'),
+     Input('run-both-btn', 'n_clicks')],
+    [State('generators-store', 'data'),
+     State('demand-store', 'data'),
+     State('solver-config-store', 'data')]
+)
+def run_calculations(uc_clicks, both_clicks, generators, demand_data, config):
+    """計算を実行"""
+    ctx = callback_context
+    if not ctx.triggered:
+        return None, None, "", {'display': 'none'}
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if generators is None or demand_data is None:
+        missing = []
+        if generators is None:
+            missing.append("発電機設定")
+        if demand_data is None:
+            missing.append("需要データ")
+        
+        status = html.Div(f"⚠️ 以下の設定が必要です: {', '.join(missing)}", 
+                         style={'color': 'orange'})
+        return None, None, status, {'display': 'none'}
+    
+    try:
+        # Unit Commitment計算
+        uc_solver = SimpleUnitCommitmentSolver(config)
+        uc_result = uc_solver.solve(generators, demand_data)
+        
+        ed_result = None
+        if button_id == 'run-both-btn':
+            # Economic Dispatch計算
+            ed_solver = SimpleEconomicDispatchSolver(config)
+            ed_result = ed_solver.solve(uc_result)
+        
+        # ステータス表示
+        if button_id == 'run-uc-btn':
+            status = html.Div("✅ 構成計算完了！", style={'color': 'green'})
+        else:
+            status = html.Div("✅ 構成計算＋経済配分完了！", style={'color': 'green'})
+        
+        return uc_result, ed_result, status, {'display': 'block'}
+        
+    except Exception as e:
+        status = html.Div(f"❌ 計算エラー: {e}", style={'color': 'red'})
+        return None, None, status, {'display': 'none'}
+
+# チャート作成関数
+def create_unit_commitment_chart(uc_result):
+    """構成計算チャートを作成"""
+    if not uc_result:
+        return go.Figure()
+    
+    generators = uc_result['generators']
+    output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
+    demand_data = uc_result['demand_data']
+    time_steps = uc_result['time_steps']
+    
+    # 時間軸作成
+    time_labels = []
+    for i in range(time_steps):
+        hour = (i * 15) // 60
+        minute = (i * 15) % 60
+        time_labels.append(f"{hour:02d}:{minute:02d}")
+    
+    # サブプロット作成
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=('発電機構成・需要', '発電機状態'),
+        row_heights=[0.7, 0.3],
+        vertical_spacing=0.1
+    )
+    
+    # 色設定
+    colors = px.colors.qualitative.Set3
+    
+    # 発電機出力の積み上げ
+    y_stack = np.zeros(time_steps)
+    
+    for i, gen in enumerate(generators):
+        y_values = []
+        for t in range(time_steps):
+            if output_flags[i, t] == 1:
+                y_values.append(gen['max_output'])
+            else:
+                y_values.append(0)
+        
+        y_upper = y_stack + np.array(y_values)
+        
+        fig.add_trace(
+            go.Scatter(
+                x=time_labels,
+                y=y_upper,
+                fill='tonexty' if i > 0 else 'tozeroy',
+                mode='none',
+                name=gen['name'],
+                fillcolor=colors[i % len(colors)],
+                hovertemplate=f'{gen["name"]}: %{{y:.0f}} kW<br>時刻: %{{x}}<extra></extra>'
+            ),
+            row=1, col=1
+        )
+        
+        y_stack = y_upper
+    
+    # 需要ライン
+    fig.add_trace(
+        go.Scatter(
+            x=time_labels,
+            y=demand_data,
+            mode='lines',
+            name='需要',
+            line=dict(color='red', width=3),
+            hovertemplate='需要: %{y:.0f} kW<br>時刻: %{x}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+    
+    # 発電機状態表示（下段）
+    for i, gen in enumerate(generators):
+        status_text = []
+        for t in range(time_steps):
+            if output_flags[i, t] == 0:
+                status_text.append('停止')
+            elif output_flags[i, t] == 1:
+                status_text.append('運転')
+            else:
+                status_text.append('起動中')
+        
+        fig.add_trace(
+            go.Scatter(
+                x=time_labels,
+                y=[i] * time_steps,
+                mode='markers',
+                marker=dict(
+                    color=[0 if s == '停止' else 1 if s == '運転' else 0.5 for s in status_text],
+                    colorscale=[[0, 'gray'], [0.5, 'orange'], [1, 'green']],
+                    size=8,
+                    symbol='square'
+                ),
+                name=f'{gen["name"]}_状態',
+                text=status_text,
+                hovertemplate=f'{gen["name"]}: %{{text}}<br>時刻: %{{x}}<extra></extra>',
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+    
+    # レイアウト設定
+    fig.update_layout(
+        title='発電機構成計算結果',
+        height=800,
+        hovermode='x unified'
+    )
+    
+    fig.update_xaxes(title_text="時刻", row=2, col=1)
+    fig.update_yaxes(title_text="出力 (kW)", row=1, col=1)
+    fig.update_yaxes(
+        title_text="発電機",
+        row=2, col=1,
+        tickmode='array',
+        tickvals=list(range(len(generators))),
+        ticktext=[gen['name'] for gen in generators]
+    )
+    
+    return fig
+
+def create_economic_dispatch_chart(uc_result, ed_result):
+    """経済配分チャートを作成"""
+    if not uc_result or not ed_result:
+        return go.Figure()
+    
+    generators = uc_result['generators']
+    power_outputs = np.array(ed_result['power_outputs'])  # リストをnumpy配列に変換
+    lambda_values = ed_result['lambda_values']
+    demand_data = uc_result['demand_data']
+    time_steps = uc_result['time_steps']
+    
+    # 時間軸作成
+    time_labels = []
+    for i in range(time_steps):
+        hour = (i * 15) // 60
+        minute = (i * 15) % 60
+        time_labels.append(f"{hour:02d}:{minute:02d}")
+    
+    # サブプロット作成
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=('発電機出力配分', 'λ値推移', '燃料費'),
+        row_heights=[0.5, 0.25, 0.25],
+        vertical_spacing=0.08
+    )
+    
+    # 色設定
+    colors = px.colors.qualitative.Set3
+    
+    # 発電機出力の積み上げ棒グラフ
+    for i, gen in enumerate(generators):
+        y_values = power_outputs[i, :]
+        
+        fig.add_trace(
+            go.Bar(
+                x=time_labels,
+                y=y_values,
+                name=gen['name'],
+                marker_color=colors[i % len(colors)],
+                hovertemplate=f'{gen["name"]}: %{{y:.1f}} kW<br>時刻: %{{x}}<extra></extra>',
+                opacity=0.8
+            ),
+            row=1, col=1
+        )
+    
+    # 需要ライン
+    fig.add_trace(
+        go.Scatter(
+            x=time_labels,
+            y=demand_data,
+            mode='lines',
+            name='需要',
+            line=dict(color='red', width=3, dash='dash'),
+            hovertemplate='需要: %{y:.1f} kW<br>時刻: %{x}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+    
+    # λ値推移
+    fig.add_trace(
+        go.Scatter(
+            x=time_labels,
+            y=lambda_values,
+            mode='lines+markers',
+            name='λ値',
+            line=dict(color='purple', width=2),
+            marker=dict(size=4),
+            hovertemplate='λ値: %{y:.3f}<br>時刻: %{x}<extra></extra>',
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+    
+    # 燃料費（固定値として表示）
+    hourly_costs = [ed_result['total_costs']['average_cost_per_hour']] * time_steps
+    
+    fig.add_trace(
+        go.Scatter(
+            x=time_labels,
+            y=hourly_costs,
+            mode='lines',
+            name='燃料費',
+            line=dict(color='orange', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(255, 165, 0, 0.3)',
+            hovertemplate='燃料費: %{y:.0f} 円/h<br>時刻: %{x}<extra></extra>',
+            showlegend=False
+        ),
+        row=3, col=1
+    )
+    
+    # レイアウト設定
+    fig.update_layout(
+        title='経済配分計算結果',
+        height=900,
+        hovermode='x unified',
+        barmode='stack'
+    )
+    
+    fig.update_xaxes(title_text="時刻", row=3, col=1)
+    fig.update_yaxes(title_text="出力 (kW)", row=1, col=1)
+    fig.update_yaxes(title_text="λ値", row=2, col=1)
+    fig.update_yaxes(title_text="燃料費 (円/h)", row=3, col=1)
+    
+    return fig
+
+# コールバック: 結果表示
+@app.callback(
+    Output('result-content', 'children'),
+    [Input('result-tabs', 'value')],
+    [State('uc-result-store', 'data'),
+     State('ed-result-store', 'data')]
+)
+def display_results(active_tab, uc_result, ed_result):
+    """結果を表示"""
+    if not uc_result:
+        return html.Div("計算結果がありません。", style={'color': 'gray'})
+    
+    if active_tab == 'uc-tab':
+        # 構成計算結果
+        fig = create_unit_commitment_chart(uc_result)
+        
+        # 統計情報
+        generators = uc_result['generators']
+        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
+        
+        running_units_per_time = []
+        for t in range(96):
+            running_count = np.sum(output_flags[:, t] == 1)
+            running_units_per_time.append(running_count)
+        
+        min_running = min(running_units_per_time)
+        max_running = max(running_units_per_time)
+        avg_running = np.mean(running_units_per_time)
+        efficiency = (1 - avg_running / len(generators)) * 100
+        
+        min_running = min(running_units_per_time)
+        max_running = max(running_units_per_time)
+        avg_running = np.mean(running_units_per_time)
+        efficiency = (1 - avg_running / len(generators)) * 100
+        
+        stats = html.Div([
+            html.H3("⚙️ 最小台数構成分析"),
+            html.Div([
+                html.Div([
+                    html.H4(f"{min_running} 台"),
+                    html.P("最小運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{max_running} 台"),
+                    html.P("最大運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{avg_running:.1f} 台"),
+                    html.P("平均運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{efficiency:.1f}%"),
+                    html.P("構成効率")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+            ], style={'margin': '1rem 0'})
+        ])
+        
+        return html.Div([
+            dcc.Graph(figure=fig),
+            stats
+        ])
+    
+    elif active_tab == 'ed-tab':
+        # 経済配分結果
+        if not ed_result:
+            return html.Div("経済配分計算が実行されていません。", style={'color': 'orange'})
+        
+        fig = create_economic_dispatch_chart(uc_result, ed_result)
+        
+        # 経済統計
+        costs = ed_result['total_costs']
+        lambda_values = np.array(ed_result['lambda_values'])  # リストをnumpy配列に変換
+        
+        stats = html.Div([
+            html.H3("💰 経済配分統計"),
+            html.Div([
+                html.Div([
+                    html.H4(f"{lambda_values.min():.3f}"),
+                    html.P("λ最小値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{lambda_values.max():.3f}"),
+                    html.P("λ最大値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{lambda_values.mean():.3f}"),
+                    html.P("λ平均値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{costs['total_cost']:.0f} 円"),
+                    html.P("総コスト")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{costs['average_cost_per_hour']:.0f} 円/時"),
+                    html.P("平均コスト")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+            ], style={'margin': '1rem 0'})
+        ])
+        
+        return html.Div([
+            dcc.Graph(figure=fig),
+            stats
+        ])[:, t] == 1)
+            running_units_per_time.append(running_count)
+        
+        min_running = min(running_units_per_time)
+        max_running = max(running_units_per_time)
+        avg_running = np.mean(running_units_per_time)
+        efficiency = (1 - avg_running / len(generators)) * 100
+        
+        stats = html.Div([
+            html.H3("⚙️ 最小台数構成分析"),
+            html.Div([
+                html.Div([
+                    html.H4(f"{min_running} 台"),
+                    html.P("最小運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{max_running} 台"),
+                    html.P("最大運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{avg_running:.1f} 台"),
+                    html.P("平均運転台数")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{efficiency:.1f}%"),
+                    html.P("構成効率")
+                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
+            ], style={'margin': '1rem 0'})
+        ])
+        
+        return html.Div([
+            dcc.Graph(figure=fig),
+            stats
+        ])
+    
+    elif active_tab == 'ed-tab':
+        # 経済配分結果
+        if not ed_result:
+            return html.Div("経済配分計算が実行されていません。", style={'color': 'orange'})
+        
+        fig = create_economic_dispatch_chart(uc_result, ed_result)
+        
+        # 経済統計
+        costs = ed_result['total_costs']
+        lambda_values = ed_result['lambda_values']
+        
+        stats = html.Div([
+            html.H3("💰 経済配分統計"),
+            html.Div([
+                html.Div([
+                    html.H4(f"{lambda_values.min():.3f}"),
+                    html.P("λ最小値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{lambda_values.max():.3f}"),
+                    html.P("λ最大値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{lambda_values.mean():.3f}"),
+                    html.P("λ平均値")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{costs['total_cost']:.0f} 円"),
+                    html.P("総コスト")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+                html.Div([
+                    html.H4(f"{costs['average_cost_per_hour']:.0f} 円/時"),
+                    html.P("平均コスト")
+                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
+            ], style={'margin': '1rem 0'})
+        ])
+        
+        return html.Div([
+            dcc.Graph(figure=fig),
+            stats
+        ])
+    
+    elif active_tab == 'stats-tab':
+        # 統計情報テーブル
+        generators = uc_result['generators']
+        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
+        
+        stats_data = []
+        for i, gen in enumerate(generators):
+            running_steps = np.sum(output_flags[i, :] == 1)
+            running_hours = running_steps * 0.25
+            utilization = (running_steps / 96) * 100
+            
+            # 起動回数計算
+            start_count = 0
+            for j in range(1, 96):
+                if output_flags[i, j] == 1 and output_flags[i, j-1] == 0:
+                    start_count += 1
+            
+            row_data = {
+                '発電機': gen['name'],
+                'タイプ': gen['unit_type'],
+                '優先順位': gen['priority'],
+                '運転時間': f"{running_hours:.1f}h",
+                '稼働率': f"{utilization:.1f}%",
+                '起動回数': start_count,
+                'マストラン': '○' if gen['is_must_run'] else '×'
+            }
+            
+            # 経済配分結果がある場合は出力統計も追加
+            if ed_result:
+                power_outputs = np.array(ed_result['power_outputs'])  # リストをnumpy配列に変換
+                running_outputs = power_outputs[i, power_outputs[i, :] > 0]
+                if len(running_outputs) > 0:
+                    avg_output = np.mean(running_outputs)
+                    max_output = np.max(power_outputs[i, :])
+                    total_generation = np.sum(power_outputs[i, :]) * 0.25
+                    
+                    row_data.update({
+                        '平均出力': f"{avg_output:.1f} kW",
+                        '最大出力': f"{max_output:.1f} kW",
+                        '総発電量': f"{total_generation:.1f} kWh"
+                    })
+            
+            stats_data.append(row_data)
+        
+        # テーブル列設定
+        columns = [
+            {"name": "発電機", "id": "発電機"},
+            {"name": "タイプ", "id": "タイプ"},
+            {"name": "優先順位", "id": "優先順位"},
+            {"name": "運転時間", "id": "運転時間"},
+            {"name": "稼働率", "id": "稼働率"},
+            {"name": "起動回数", "id": "起動回数"},
+            {"name": "マストラン", "id": "マストラン"}
+        ]
+        
+        if ed_result:
+            columns.extend([
+                {"name": "平均出力", "id": "平均出力"},
+                {"name": "最大出力", "id": "最大出力"},
+                {"name": "総発電量", "id": "総発電量"}
+            ])
+        
+        table = dash_table.DataTable(
+            data=stats_data,
+            columns=columns,
+            style_cell={'textAlign': 'left'},
+            style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
+            style_table={'margin': '1rem 0'}
+        )
+        
+        return html.Div([
+            html.H3("📊 運転統計"),
+            table
+        ])
+    
+    return html.Div()
+
+if __name__ == '__main__':
+    app.run(debug=True)
