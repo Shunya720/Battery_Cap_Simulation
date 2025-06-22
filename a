@@ -1,1077 +1,2200 @@
-import dash
-from dash import dcc, html, Input, Output, State, callback_context, dash_table
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
+"""
+PV出力予測ウェブアプリ - Streamlit版（宮古島全土対応版 + Open-Meteo API連携修正版）
+使いやすいWebインターフェースでPV予測を実行
+
+実行方法:
+streamlit run pv_web_app.py
+"""
+
+import streamlit as st
 import pandas as pd
 import numpy as np
-import base64
-import io
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
+import os
 import json
-from typing import List, Dict, Tuple
+import traceback
+import requests
+from pathlib import Path
 
-# Dashアプリケーション初期化
-app = dash.Dash(__name__)
-app.title = "発電機構成計算ツール"
-
-# カスタムCSS
-app.layout = html.Div([
-    dcc.Store(id='generators-store'),
-    dcc.Store(id='demand-store'),
-    dcc.Store(id='uc-result-store'),
-    dcc.Store(id='ed-result-store'),
-    dcc.Store(id='solver-config-store', data={
-        'margin_dg': 0.1,
-        'margin_gt': 0.15,
-        'stop_margin_dg': 0.05,
-        'stop_margin_gt': 0.08,
-        'lambda_min': 0.0,
-        'lambda_max': 100.0,
-        'lambda_tolerance': 0.001
-    }),
-    
-    # ヘッダー
-    html.Div([
-        html.H1("⚡ 発電機構成計算ツール", 
-                style={'text-align': 'center', 'color': 'white', 'margin': '0'}),
-    ], style={
-        'background': 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
-        'padding': '2rem',
-        'border-radius': '10px',
-        'margin-bottom': '2rem'
-    }),
-    
-    # メインコンテンツ
-    html.Div([
-        # サイドバー
-        html.Div([
-            html.H3("⚙️ 計算設定", style={'margin-bottom': '1rem'}),
-            
-            # 構成計算設定
-            html.H4("📋 構成計算設定"),
-            html.Label("DGマージン率 (%)"),
-            dcc.Slider(id='margin-dg-slider', min=0, max=30, value=10, step=1,
-                      marks={i: f'{i}%' for i in range(0, 31, 5)},
-                      tooltip={"placement": "bottom", "always_visible": True}),
-            
-            html.Label("GTマージン率 (%)"),
-            dcc.Slider(id='margin-gt-slider', min=0, max=30, value=15, step=1,
-                      marks={i: f'{i}%' for i in range(0, 31, 5)},
-                      tooltip={"placement": "bottom", "always_visible": True}),
-            
-            html.Label("DG解列マージン率 (%)"),
-            dcc.Slider(id='stop-margin-dg-slider', min=0, max=20, value=5, step=1,
-                      marks={i: f'{i}%' for i in range(0, 21, 5)},
-                      tooltip={"placement": "bottom", "always_visible": True}),
-            
-            html.Label("GT解列マージン率 (%)"),
-            dcc.Slider(id='stop-margin-gt-slider', min=0, max=20, value=8, step=1,
-                      marks={i: f'{i}%' for i in range(0, 21, 5)},
-                      tooltip={"placement": "bottom", "always_visible": True}),
-            
-            html.Hr(),
-            
-            # 経済配分設定
-            html.H4("⚡ 経済配分設定"),
-            html.Label("λ最小値"),
-            dcc.Input(id='lambda-min-input', type='number', value=0.0, step=1.0),
-            
-            html.Label("λ最大値"),
-            dcc.Input(id='lambda-max-input', type='number', value=100.0, step=1.0),
-            
-            html.Label("λ許容誤差 (kW)"),
-            dcc.Input(id='lambda-tolerance-input', type='number', value=0.001, step=0.001),
-            
-        ], style={
-            'width': '25%',
-            'float': 'left',
-            'padding': '1rem',
-            'background': '#f8f9fa',
-            'border-radius': '10px',
-            'margin-right': '2%'
-        }),
-        
-        # メインコンテンツエリア
-        html.Div([
-            # 需要データアップロード
-            html.Div([
-                html.H2("📊 需要予測データアップロード"),
-                dcc.Upload(
-                    id='upload-demand',
-                    children=html.Div([
-                        'ドラッグ&ドロップまたはクリックして需要予測CSVファイルを選択'
-                    ]),
-                    style={
-                        'width': '100%',
-                        'height': '60px',
-                        'lineHeight': '60px',
-                        'borderWidth': '1px',
-                        'borderStyle': 'dashed',
-                        'borderRadius': '5px',
-                        'textAlign': 'center',
-                        'margin': '10px'
-                    },
-                    multiple=False
-                ),
-                html.Div(id='demand-upload-status'),
-                html.Div(id='demand-preview'),
-            ], style={'margin-bottom': '2rem'}),
-            
-            # 発電機設定
-            html.Div([
-                html.H2("🔧 発電機設定"),
-                html.Label("発電機台数"),
-                dcc.Input(id='num-generators-input', type='number', value=8, min=1, max=20),
-                html.Br(), html.Br(),
-                html.Button("発電機設定テーブルを生成", id='generate-gen-table-btn', 
-                           style={'margin-bottom': '1rem'}),
-                html.Div(id='generator-config-table'),
-                html.Button("発電機設定を保存", id='save-generators-btn', 
-                           style={'margin-top': '1rem', 'background': '#28a745', 'color': 'white'}),
-                html.Div(id='generator-save-status'),
-            ], style={'margin-bottom': '2rem'}),
-            
-            # 計算実行
-            html.Div([
-                html.H2("⚡ 構成計算・経済配分実行"),
-                html.Div([
-                    html.Button("🔧 構成計算のみ実行", id='run-uc-btn', 
-                               style={'margin-right': '1rem', 'background': '#6c757d', 'color': 'white'}),
-                    html.Button("🚀 構成計算＋経済配分実行", id='run-both-btn',
-                               style={'background': '#007bff', 'color': 'white'}),
-                ]),
-                html.Div(id='calculation-status'),
-            ], style={'margin-bottom': '2rem'}),
-            
-            # 結果表示
-            html.Div([
-                html.H2("📈 計算結果"),
-                dcc.Tabs(id='result-tabs', value='uc-tab', children=[
-                    dcc.Tab(label='📊 構成計算結果', value='uc-tab'),
-                    dcc.Tab(label='⚡ 経済配分結果', value='ed-tab'),
-                    dcc.Tab(label='📊 統計情報', value='stats-tab'),
-                ]),
-                html.Div(id='result-content'),
-            ], id='results-section', style={'display': 'none'}),
-            
-        ], style={'width': '73%', 'float': 'right'}),
-        
-    ], style={'clear': 'both', 'margin': '0'}),
-    
-], style={'padding': '1rem', 'font-family': 'Arial, sans-serif'})
-
-# 発電機設定のデフォルト値
-def get_default_generator_config(index: int) -> dict:
-    """デフォルト発電機設定を取得"""
-    defaults = {
-        0: {"name": "DG3", "type": "DG", "min": 5000, "max": 10000, "priority": 1, 
-            "heat_a": 4.8e-06, "heat_b": 0.1120, "heat_c": 420,
-            "startup_cost": 25893, "shutdown_cost": 42084},
-        1: {"name": "DG4", "type": "DG", "min": 5000, "max": 10000, "priority": 2, 
-            "heat_a": 1.0e-07, "heat_b": 0.1971, "heat_c": 103,
-            "startup_cost": 23116, "shutdown_cost": 50116},
-        2: {"name": "DG5", "type": "DG", "min": 7500, "max": 15000, "priority": 3, 
-            "heat_a": 3.2e-06, "heat_b": 0.1430, "heat_c": 300,
-            "startup_cost": 50630, "shutdown_cost": 65729},
-        3: {"name": "DG6", "type": "DG", "min": 6000, "max": 12000, "priority": 4, 
-            "heat_a": 1.0e-06, "heat_b": 0.1900, "heat_c": 216,
-            "startup_cost": 13580, "shutdown_cost": 13097},
-        4: {"name": "DG7", "type": "DG", "min": 6000, "max": 12000, "priority": 5, 
-            "heat_a": 5.0e-06, "heat_b": 0.1100, "heat_c": 612,
-            "startup_cost": 13580, "shutdown_cost": 13097},
-        5: {"name": "GT1", "type": "GT", "min": 2500, "max": 5000, "priority": 6, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
-            "startup_cost": 12748, "shutdown_cost": 26643},
-        6: {"name": "GT2", "type": "GT", "min": 2500, "max": 5000, "priority": 7, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
-            "startup_cost": 12748, "shutdown_cost": 26643},
-        7: {"name": "GT3", "type": "GT", "min": 2500, "max": 5000, "priority": 8, 
-            "heat_a": 2.0e-06, "heat_b": 0.1500, "heat_c": 800,
-            "startup_cost": 12748, "shutdown_cost": 26643}
-    }
-    
-    if index in defaults:
-        return defaults[index]
-    else:
-        return {"name": f"発電機{index+1}", "type": "DG", "min": 1000, "max": 5000, "priority": index+1,
-                "heat_a": 1.0e-06, "heat_b": 0.1500, "heat_c": 300,
-                "startup_cost": 10000, "shutdown_cost": 10000}
-
-# コールバック: 設定値の更新
-@app.callback(
-    Output('solver-config-store', 'data'),
-    [Input('margin-dg-slider', 'value'),
-     Input('margin-gt-slider', 'value'),
-     Input('stop-margin-dg-slider', 'value'),
-     Input('stop-margin-gt-slider', 'value'),
-     Input('lambda-min-input', 'value'),
-     Input('lambda-max-input', 'value'),
-     Input('lambda-tolerance-input', 'value')],
-    [State('solver-config-store', 'data')]
+# ページ設定
+st.set_page_config(
+    page_title="宮古島PV出力予測システム",
+    page_icon="🏝️",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-def update_solver_config(margin_dg, margin_gt, stop_margin_dg, stop_margin_gt,
-                        lambda_min, lambda_max, lambda_tolerance, current_config):
-    """設定値を更新"""
-    return {
-        'margin_dg': margin_dg / 100 if margin_dg is not None else current_config['margin_dg'],
-        'margin_gt': margin_gt / 100 if margin_gt is not None else current_config['margin_gt'],
-        'stop_margin_dg': stop_margin_dg / 100 if stop_margin_dg is not None else current_config['stop_margin_dg'],
-        'stop_margin_gt': stop_margin_gt / 100 if stop_margin_gt is not None else current_config['stop_margin_gt'],
-        'lambda_min': lambda_min if lambda_min is not None else current_config['lambda_min'],
-        'lambda_max': lambda_max if lambda_max is not None else current_config['lambda_max'],
-        'lambda_tolerance': lambda_tolerance if lambda_tolerance is not None else current_config['lambda_tolerance']
-    }
 
-# コールバック: 需要データアップロード
-@app.callback(
-    [Output('demand-store', 'data'),
-     Output('demand-upload-status', 'children'),
-     Output('demand-preview', 'children')],
-    [Input('upload-demand', 'contents')],
-    [State('upload-demand', 'filename')]
-)
-def upload_demand_data(contents, filename):
-    """需要データをアップロード"""
-    if contents is None:
-        return None, "", ""
-    
-    try:
-        content_type, content_string = contents.split(',')
-        decoded = base64.b64decode(content_string)
-        
-        # エンコーディング自動検出
-        encodings = ['utf-8', 'shift-jis', 'cp932', 'euc-jp', 'iso-2022-jp']
-        df = None
-        
-        for encoding in encodings:
+# CSSスタイル
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(90deg, #4A90E2, #50C878);
+        padding: 1rem;
+        border-radius: 10px;
+        text-align: center;
+        color: white;
+        font-size: 2rem;
+        font-weight: bold;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: #f0f2f6;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #1f77b4;
+    }
+    .success-box {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .error-box {
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def init_streamlit_session():
+    """
+    Streamlitセッションの安全な初期化（宮古島対応版）
+    """
+    # 基本設定の初期化
+    if 'prediction_date' not in st.session_state:
+        st.session_state.prediction_date = datetime.now().date()
+
+    if 'prediction_time' not in st.session_state:
+        st.session_state.prediction_time = datetime.now().time()
+
+    if 'num_points' not in st.session_state:
+        st.session_state.num_points = 3
+
+    # 気象条件の初期化
+    if 'current_irradiance' not in st.session_state:
+        st.session_state.current_irradiance = 0.5
+
+    if 'current_pv' not in st.session_state:
+        st.session_state.current_pv = 40.0  # MW
+
+    if 'weather_condition' not in st.session_state:
+        st.session_state.weather_condition = "晴れ"
+
+    if 'cloud_cover' not in st.session_state:
+        st.session_state.cloud_cover = 30
+
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 25.0
+
+    # 宮古島PVシステム仕様の初期化
+    if 'pv_capacity' not in st.session_state:
+        st.session_state.pv_capacity = 100.0  # MW
+
+    # 宮古島地域特性の初期化
+    if 'season_factor' not in st.session_state:
+        st.session_state.season_factor = "春季（3-5月）"
+
+    if 'weather_risk' not in st.session_state:
+        st.session_state.weather_risk = "平常時"
+
+    if 'operational_rate' not in st.session_state:
+        st.session_state.operational_rate = 95.0
+
+    if 'total_efficiency' not in st.session_state:
+        st.session_state.total_efficiency = 0.16
+
+    # Open-Meteo API設定
+    if 'use_openmeteo' not in st.session_state:
+        st.session_state.use_openmeteo = False
+
+    if 'openmeteo_data' not in st.session_state:
+        st.session_state.openmeteo_data = None
+
+    if 'api_enabled' not in st.session_state:
+        st.session_state.api_enabled = False
+
+    # API予測データ保存用
+    if 'api_prediction_data' not in st.session_state:
+        st.session_state.api_prediction_data = None
+
+    # モデル設定の初期化
+    if 'selected_model' not in st.session_state:
+        st.session_state.selected_model = ""
+
+    if 'model_type' not in st.session_state:
+        st.session_state.model_type = "random_forest"
+
+    if 'forecast_steps' not in st.session_state:
+        st.session_state.forecast_steps = ["15分先", "30分先", "1時間先"]
+
+    # 結果保存用
+    if 'last_prediction_results' not in st.session_state:
+        st.session_state.last_prediction_results = None
+
+    if 'model_loaded' not in st.session_state:
+        st.session_state.model_loaded = False
+
+
+class OpenMeteoWeatherAPI:
+    """
+    Open-Meteo API連携クラス（宮古島対応完全版）
+    """
+
+    def __init__(self):
+        # 宮古島の座標
+        self.latitude = 24.7902
+        self.longitude = 125.3111
+        self.base_url = "https://api.open-meteo.com/v1"
+
+    @st.cache_data(ttl=1800)  # 30分キャッシュ
+    def get_forecast_data(_self, past_days=1):
+        """
+        宮古島向けforecastデータを取得
+        """
+        try:
+            url = f"{_self.base_url}/forecast"
+
+            params = {
+                'latitude': _self.latitude,
+                'longitude': _self.longitude,
+                'hourly': [
+                    'temperature_2m',
+                    'relative_humidity_2m',
+                    'shortwave_radiation',
+                    'direct_radiation',
+                    'diffuse_radiation',
+                    'cloud_cover',
+                    'wind_speed_10m'
+                ],
+                'timezone': 'Asia/Tokyo',
+                'past_days': past_days,
+                'forecast_days': 1
+            }
+
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # hourlyデータの処理
+            if 'hourly' in data and data['hourly']:
+                df = pd.DataFrame({
+                    'datetime': pd.to_datetime(data['hourly']['time']),
+                    'temperature': data['hourly']['temperature_2m'],
+                    'humidity': data['hourly'].get('relative_humidity_2m', [75.0] * len(data['hourly']['time'])),
+                    'shortwave_radiation': data['hourly'].get('shortwave_radiation',
+                                                              [500.0] * len(data['hourly']['time'])),
+                    'direct_radiation': data['hourly'].get('direct_radiation', [400.0] * len(data['hourly']['time'])),
+                    'diffuse_radiation': data['hourly'].get('diffuse_radiation', [100.0] * len(data['hourly']['time'])),
+                    'cloud_cover': data['hourly'].get('cloud_cover', [30.0] * len(data['hourly']['time'])),
+                    'wind_speed': data['hourly'].get('wind_speed_10m', [5.0] * len(data['hourly']['time']))
+                })
+
+                # 日射強度をkW/m²に変換
+                df['日射強度'] = df['shortwave_radiation'] / 1000  # W/m² → kW/m²
+                df['直達日射'] = df['direct_radiation'] / 1000
+                df['散乱日射'] = df['diffuse_radiation'] / 1000
+
+                # PV出力を推定
+                pv_capacity = getattr(st.session_state, 'pv_capacity', 100.0)
+                system_efficiency = 0.85
+                df['PV出力'] = df['日射強度'] * pv_capacity * system_efficiency
+
+                return df
+            else:
+                st.error("APIから有効なデータを取得できませんでした")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"API接続エラー: {e}")
+            return None
+        except Exception as e:
+            st.error(f"データ処理エラー: {e}")
+            return None
+
+    @st.cache_data(ttl=3600)  # 1時間キャッシュ
+    def get_historical_weather(_self, start_date, end_date):
+        """
+        過去の気象データを取得（archiveエンドポイント使用）
+        """
+        try:
+            url = f"{_self.base_url}/archive"
+
+            params = {
+                'latitude': _self.latitude,
+                'longitude': _self.longitude,
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d'),
+                'hourly': [
+                    'temperature_2m',
+                    'relative_humidity_2m',
+                    'shortwave_radiation',
+                    'direct_radiation',
+                    'diffuse_radiation',
+                    'cloud_cover',
+                    'wind_speed_10m'
+                ],
+                'timezone': 'Asia/Tokyo'
+            }
+
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # データフレーム作成
+            df = pd.DataFrame({
+                'datetime': pd.to_datetime(data['hourly']['time']),
+                'temperature': data['hourly']['temperature_2m'],
+                'humidity': data['hourly']['relative_humidity_2m'],
+                'shortwave_radiation': data['hourly']['shortwave_radiation'],
+                'direct_radiation': data['hourly']['direct_radiation'],
+                'diffuse_radiation': data['hourly']['diffuse_radiation'],
+                'cloud_cover': data['hourly']['cloud_cover'],
+                'wind_speed': data['hourly']['wind_speed_10m']
+            })
+
+            # 日射強度をkW/m²に変換
+            df['日射強度'] = df['shortwave_radiation'] / 1000
+
+            # PV出力を推定
+            pv_capacity = getattr(st.session_state, 'pv_capacity', 100.0)
+            system_efficiency = 0.85
+            df['PV出力'] = df['日射強度'] * pv_capacity * system_efficiency
+
+            return df
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"API接続エラー: {e}")
+            return None
+        except Exception as e:
+            st.error(f"データ処理エラー: {e}")
+            return None
+
+    @st.cache_data(ttl=900)  # 15分キャッシュ
+    def get_today_hourly_data(_self):
+        """
+        本日の1時間間隔データを取得（15分間隔の代替）
+        """
+        try:
+            url = f"{_self.base_url}/forecast"
+
+            # 今日の0時から現在までの時間を計算
+            now = datetime.now()
+            today_start = datetime.combine(now.date(), datetime.min.time())
+
+            # API パラメータ設定（hourlyのみ使用）
+            params = {
+                'latitude': _self.latitude,
+                'longitude': _self.longitude,
+                'hourly': [
+                    'temperature_2m',
+                    'relative_humidity_2m',
+                    'shortwave_radiation',
+                    'direct_radiation',
+                    'diffuse_radiation',
+                    'cloud_cover',
+                    'wind_speed_10m'
+                ],
+                'timezone': 'Asia/Tokyo',
+                'past_days': 1,
+                'forecast_days': 0
+            }
+
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # hourlyデータの処理
+            hourly_data = []
+            if 'hourly' in data and data['hourly']:
+                times = pd.to_datetime(data['hourly']['time'])
+                temperature = data['hourly']['temperature_2m']
+                humidity = data['hourly'].get('relative_humidity_2m', [75.0] * len(times))
+                shortwave = data['hourly'].get('shortwave_radiation', [500.0] * len(times))
+                direct = data['hourly'].get('direct_radiation', [400.0] * len(times))
+                diffuse = data['hourly'].get('diffuse_radiation', [100.0] * len(times))
+                cloud_cover = data['hourly'].get('cloud_cover', [30.0] * len(times))
+                wind_speed = data['hourly'].get('wind_speed_10m', [5.0] * len(times))
+
+                # 今日の0時以降のデータのみフィルタリング
+                for i, time in enumerate(times):
+                    if today_start <= time <= now:
+                        hourly_data.append({
+                            'datetime': time,
+                            'temperature': temperature[i] if i < len(temperature) and temperature[
+                                i] is not None else 25.0,
+                            'humidity': humidity[i] if i < len(humidity) and humidity[i] is not None else 75.0,
+                            'shortwave_radiation': shortwave[i] if i < len(shortwave) and shortwave[
+                                i] is not None else 500.0,
+                            'direct_radiation': direct[i] if i < len(direct) and direct[i] is not None else 400.0,
+                            'diffuse_radiation': diffuse[i] if i < len(diffuse) and diffuse[i] is not None else 100.0,
+                            'cloud_cover': cloud_cover[i] if i < len(cloud_cover) and cloud_cover[
+                                i] is not None else 30.0,
+                            'wind_speed': wind_speed[i] if i < len(wind_speed) and wind_speed[i] is not None else 5.0
+                        })
+
+            if not hourly_data:
+                st.warning("本日の1時間間隔データが取得できませんでした")
+                return None
+
+            # データフレーム作成
+            df = pd.DataFrame(hourly_data)
+
+            # 日射強度をkW/m²に変換
+            df['日射強度'] = df['shortwave_radiation'] / 1000  # W/m² → kW/m²
+            df['直達日射'] = df['direct_radiation'] / 1000
+            df['散乱日射'] = df['diffuse_radiation'] / 1000
+
+            # PV出力を推定
+            pv_capacity = getattr(st.session_state, 'pv_capacity', 100.0)
+            system_efficiency = 0.85
+            df['PV出力'] = df['日射強度'] * pv_capacity * system_efficiency
+
+            # 15分間隔データをシミュレート（補間）
+            df_interpolated = _self._interpolate_to_15min(df)
+
+            # データ取得情報をログに出力
+            st.info(f"✅ 本日0時〜現在: {len(df)}件の1時間間隔データを取得")
+            st.info(f"📊 15分間隔に補間: {len(df_interpolated)}件のデータ")
+            st.info(
+                f"📊 時間範囲: {df_interpolated['datetime'].min().strftime('%H:%M')} 〜 {df_interpolated['datetime'].max().strftime('%H:%M')}")
+
+            return df_interpolated
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"API接続エラー: {e}")
+            return None
+        except Exception as e:
+            st.error(f"本日1時間間隔データ処理エラー: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            return None
+
+    def _interpolate_to_15min(self, hourly_df):
+        """
+        1時間間隔データを15分間隔に線形補間
+        """
+        try:
+            if len(hourly_df) < 2:
+                return hourly_df
+
+            # 15分間隔の時間軸を作成
+            start_time = hourly_df['datetime'].min()
+            end_time = hourly_df['datetime'].max()
+
+            # 15分間隔のタイムスタンプを生成
+            time_range = pd.date_range(start=start_time, end=end_time, freq='15min')
+
+            # 新しいデータフレームを作成
+            interpolated_data = []
+
+            for target_time in time_range:
+                # 最も近い前後の時刻を見つける
+                before = hourly_df[hourly_df['datetime'] <= target_time]
+                after = hourly_df[hourly_df['datetime'] >= target_time]
+
+                if len(before) > 0 and len(after) > 0:
+                    before_row = before.iloc[-1]
+                    after_row = after.iloc[0]
+
+                    if before_row['datetime'] == after_row['datetime']:
+                        # 完全一致の場合
+                        interpolated_row = before_row.copy()
+                        interpolated_row['datetime'] = target_time
+                    else:
+                        # 線形補間
+                        time_diff = (after_row['datetime'] - before_row['datetime']).total_seconds()
+                        target_diff = (target_time - before_row['datetime']).total_seconds()
+                        ratio = target_diff / time_diff if time_diff > 0 else 0
+
+                        interpolated_row = {
+                            'datetime': target_time,
+                            'temperature': before_row['temperature'] + (
+                                        after_row['temperature'] - before_row['temperature']) * ratio,
+                            'humidity': before_row['humidity'] + (
+                                        after_row['humidity'] - before_row['humidity']) * ratio,
+                            'shortwave_radiation': before_row['shortwave_radiation'] + (
+                                        after_row['shortwave_radiation'] - before_row['shortwave_radiation']) * ratio,
+                            'direct_radiation': before_row['direct_radiation'] + (
+                                        after_row['direct_radiation'] - before_row['direct_radiation']) * ratio,
+                            'diffuse_radiation': before_row['diffuse_radiation'] + (
+                                        after_row['diffuse_radiation'] - before_row['diffuse_radiation']) * ratio,
+                            'cloud_cover': before_row['cloud_cover'] + (
+                                        after_row['cloud_cover'] - before_row['cloud_cover']) * ratio,
+                            'wind_speed': before_row['wind_speed'] + (
+                                        after_row['wind_speed'] - before_row['wind_speed']) * ratio,
+                            '日射強度': before_row['日射強度'] + (
+                                        after_row['日射強度'] - before_row['日射強度']) * ratio,
+                            '直達日射': before_row['直達日射'] + (
+                                        after_row['直達日射'] - before_row['直達日射']) * ratio,
+                            '散乱日射': before_row['散乱日射'] + (
+                                        after_row['散乱日射'] - before_row['散乱日射']) * ratio,
+                            'PV出力': before_row['PV出力'] + (after_row['PV出力'] - before_row['PV出力']) * ratio
+                        }
+
+                    interpolated_data.append(interpolated_row)
+                elif len(before) > 0:
+                    # 後方外挿
+                    row = before.iloc[-1].copy()
+                    row['datetime'] = target_time
+                    interpolated_data.append(row)
+                elif len(after) > 0:
+                    # 前方外挿
+                    row = after.iloc[0].copy()
+                    row['datetime'] = target_time
+                    interpolated_data.append(row)
+
+            return pd.DataFrame(interpolated_data)
+
+        except Exception as e:
+            st.error(f"データ補間エラー: {e}")
+            return hourly_df
+
+    @st.cache_data(ttl=300)  # 5分キャッシュ
+    def get_current_weather(_self):
+        """
+        現在の気象データを取得（最新のforecastデータを使用）
+        """
+        try:
+            url = f"{_self.base_url}/forecast"
+
+            params = {
+                'latitude': _self.latitude,
+                'longitude': _self.longitude,
+                'current': [
+                    'temperature_2m',
+                    'relative_humidity_2m',
+                    'cloud_cover'
+                ],
+                'hourly': [
+                    'shortwave_radiation',
+                    'wind_speed_10m'
+                ],
+                'timezone': 'Asia/Tokyo',
+                'forecast_days': 1
+            }
+
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # 現在の基本データ
+            current = data.get('current', {})
+
+            # 現在時刻に最も近い日射量データを取得
+            shortwave_radiation = 0
+            wind_speed = 5.0
+
+            if 'hourly' in data and data['hourly']:
+                current_time = datetime.now()
+                hourly_times = pd.to_datetime(data['hourly']['time'])
+
+                # 現在時刻に最も近いデータを見つける
+                time_diffs = [abs((t - current_time).total_seconds()) for t in hourly_times]
+                closest_index = time_diffs.index(min(time_diffs))
+
+                if 'shortwave_radiation' in data['hourly'] and closest_index < len(
+                        data['hourly']['shortwave_radiation']):
+                    shortwave_radiation = data['hourly']['shortwave_radiation'][closest_index] or 0
+
+                if 'wind_speed_10m' in data['hourly'] and closest_index < len(data['hourly']['wind_speed_10m']):
+                    wind_speed = data['hourly']['wind_speed_10m'][closest_index] or 5.0
+
+            # 夜間チェック（宮古島の日照時間: 6:00-18:30）
+            current_hour = datetime.now().hour + datetime.now().minute / 60.0
+            if current_hour < 6.0 or current_hour > 18.5:
+                shortwave_radiation = 0  # 夜間は日射量0
+
+            return {
+                'datetime': pd.to_datetime(current.get('time', datetime.now().isoformat())),
+                'temperature': current.get('temperature_2m', 25.0),
+                'humidity': current.get('relative_humidity_2m', 75.0),
+                'cloud_cover': current.get('cloud_cover', 30.0),
+                'wind_speed': wind_speed,
+                'shortwave_radiation': shortwave_radiation,
+                'irradiance': shortwave_radiation / 1000  # kW/m²に変換
+            }
+
+        except Exception as e:
+            st.warning(f"現在気象データ取得エラー: {e}")
+            # フォールバック：デフォルト値を返す
+            current_hour = datetime.now().hour + datetime.now().minute / 60.0
+            default_irradiance = 0.0 if (current_hour < 6.0 or current_hour > 18.5) else 0.5
+
+            return {
+                'datetime': pd.to_datetime(datetime.now()),
+                'temperature': 25.0,
+                'humidity': 75.0,
+                'cloud_cover': 30.0,
+                'wind_speed': 5.0,
+                'shortwave_radiation': default_irradiance * 1000,
+                'irradiance': default_irradiance
+            }
+
+    def test_api_connection(_self):
+        """
+        API接続テスト（宮古島対応版）
+        """
+        try:
+            url = f"{_self.base_url}/forecast"
+            params = {
+                'latitude': _self.latitude,
+                'longitude': _self.longitude,
+                'hourly': 'temperature_2m,shortwave_radiation',
+                'current': 'temperature_2m',
+                'timezone': 'Asia/Tokyo',
+                'past_days': 1
+            }
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # データの存在確認
+            has_hourly = 'hourly' in data and data['hourly']
+            has_current = 'current' in data and data['current']
+            has_shortwave = has_hourly and 'shortwave_radiation' in data['hourly']
+
+            return {
+                'success': True,
+                'status_code': response.status_code,
+                'has_hourly': has_hourly,
+                'has_current': has_current,
+                'has_shortwave': has_shortwave,
+                'has_minutely': False,  # 宮古島では利用不可
+                'url': response.url,
+                'note': '宮古島では15分間隔データは利用できません。1時間間隔データを補間して使用します。'
+            }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'url': f"{_self.base_url}/forecast",
+                'note': 'API接続に失敗しました'
+            }
+
+
+class StreamlitPVPredictor:
+    """
+    Streamlit用PV予測クラス（宮古島対応版・実予測機のみ使用）
+    """
+
+    def __init__(self):
+        self.predictor = None
+        self.model_loaded = False
+        self.model_info = {}
+        # API機能の初期化
+        self.weather_api = OpenMeteoWeatherAPI()
+
+    @st.cache_resource
+    def load_model(_self, model_path):
+        """
+        学習済みモデルの読み込み（実予測機のみ使用）
+        """
+        try:
+            # 実際のPVPredictorクラスのインポートを試行
             try:
-                df = pd.read_csv(io.StringIO(decoded.decode(encoding)))
-                break
-            except UnicodeDecodeError:
-                continue
-        
-        if df is None:
-            return None, html.Div("❌ サポートされているエンコーディングで読み込めませんでした", 
-                                 style={'color': 'red'}), ""
-        
-        if len(df.columns) < 2:
-            return None, html.Div("❌ CSVファイルに最低2列（時刻、需要）が必要です", 
-                                 style={'color': 'red'}), ""
-        
-        if len(df) < 96:
-            return None, html.Div(f"❌ データが96ステップ未満です（現在: {len(df)}ステップ）", 
-                                 style={'color': 'red'}), ""
-        
-        # 需要データを数値に変換
-        demand_column = df.columns[1]  # 2列目を需要データとして使用
-        demand_values = pd.to_numeric(df[demand_column], errors='coerce').values[:96]
-        
-        valid_count = np.sum(~np.isnan(demand_values))
-        
-        # プレビュー作成
-        preview_df = df.head(10)
-        preview_table = dash_table.DataTable(
-            data=preview_df.to_dict('records'),
-            columns=[{"name": i, "id": i} for i in preview_df.columns],
-            style_cell={'textAlign': 'left'},
-            style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'}
-        )
-        
-        # 統計情報
-        valid_demands = demand_values[~np.isnan(demand_values)]
-        stats = html.Div([
-            html.H4("需要データ統計"),
-            html.P(f"最小値: {valid_demands.min():.0f} kW"),
-            html.P(f"平均値: {valid_demands.mean():.0f} kW"),
-            html.P(f"最大値: {valid_demands.max():.0f} kW"),
-            html.P(f"需要幅: {valid_demands.max() - valid_demands.min():.0f} kW"),
-        ])
-        
-        status = html.Div([
-            html.Div(f"✅ 需要予測データ読み込み完了（{valid_count}/96ステップ有効）", 
-                     style={'color': 'green'}),
-            stats
-        ])
-        
-        preview = html.Div([
-            html.H4("📋 データプレビュー"),
-            preview_table
-        ])
-        
-        return demand_values.tolist(), status, preview
-        
-    except Exception as e:
-        return None, html.Div(f"❌ ファイル読み込みエラー: {e}", style={'color': 'red'}), ""
+                from prediction_example import PVPredictor
+                predictor = PVPredictor(model_path)
+                
+                # モデルが正常に読み込まれたか確認
+                if predictor.predictor is None:
+                    st.error("❌ 外部予測機の読み込みに失敗しました")
+                    st.error("以下を確認してください:")
+                    st.error("1. prediction_example.pyファイルが存在するか")
+                    st.error("2. pv_prediction_models.pyファイルが存在するか") 
+                    st.error("3. 学習済みモデルファイルが正しいパスに保存されているか")
+                    return None, {}
+                
+            except ImportError as e:
+                st.error("❌ 必要なモジュールがインポートできません")
+                st.error(f"エラー詳細: {e}")
+                st.error("以下のファイルが必要です:")
+                st.error("- prediction_example.py")
+                st.error("- pv_prediction_models.py")
+                return None, {}
 
-# コールバック: 発電機設定テーブル生成
-@app.callback(
-    Output('generator-config-table', 'children'),
-    [Input('generate-gen-table-btn', 'n_clicks')],
-    [State('num-generators-input', 'value')]
-)
-def generate_generator_table(n_clicks, num_generators):
-    """発電機設定テーブルを生成"""
-    if n_clicks is None or num_generators is None:
-        return ""
-    
-    # デフォルト設定でテーブルデータを作成
-    table_data = []
-    for i in range(num_generators):
-        config = get_default_generator_config(i)
-        table_data.append({
-            'ID': i,
-            '名前': config['name'],
-            'タイプ': config['type'],
-            '最小出力(kW)': config['min'],
-            '最大出力(kW)': config['max'],
-            '優先順位': config['priority'],
-            '最小運転時間(h)': 2.0,
-            '最小停止時間(h)': 1.0,
-            'マストラン': False,
-            'a係数': f"{config['heat_a']:.2e}",
-            'b係数': f"{config['heat_b']:.4f}",
-            'c係数': config['heat_c'],
-            '燃料単価(円/kL)': 60354,
-            '起動費(円)': config['startup_cost'],
-            '停止費(円)': config['shutdown_cost']
-        })
-    
-    table = dash_table.DataTable(
-        id='generator-table',
-        data=table_data,
-        columns=[
-            {"name": "ID", "id": "ID", "editable": False},
-            {"name": "名前", "id": "名前", "editable": True},
-            {"name": "タイプ", "id": "タイプ", "editable": True, "presentation": "dropdown"},
-            {"name": "最小出力(kW)", "id": "最小出力(kW)", "editable": True, "type": "numeric"},
-            {"name": "最大出力(kW)", "id": "最大出力(kW)", "editable": True, "type": "numeric"},
-            {"name": "優先順位", "id": "優先順位", "editable": True, "type": "numeric"},
-            {"name": "最小運転時間(h)", "id": "最小運転時間(h)", "editable": True, "type": "numeric"},
-            {"name": "最小停止時間(h)", "id": "最小停止時間(h)", "editable": True, "type": "numeric"},
-            {"name": "マストラン", "id": "マストラン", "editable": True, "type": "text"},
-            {"name": "a係数", "id": "a係数", "editable": True},
-            {"name": "b係数", "id": "b係数", "editable": True, "type": "numeric"},
-            {"name": "c係数", "id": "c係数", "editable": True, "type": "numeric"},
-            {"name": "燃料単価(円/kL)", "id": "燃料単価(円/kL)", "editable": True, "type": "numeric"},
-            {"name": "起動費(円)", "id": "起動費(円)", "editable": True, "type": "numeric"},
-            {"name": "停止費(円)", "id": "停止費(円)", "editable": True, "type": "numeric"},
-        ],
-        dropdown={
-            'タイプ': {
-                'options': [
-                    {'label': 'DG', 'value': 'DG'},
-                    {'label': 'GT', 'value': 'GT'}
-                ]
-            }
-        },
-        editable=True,
-        style_cell={'textAlign': 'left', 'fontSize': '12px'},
-        style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-        style_table={'overflowX': 'auto'}
-    )
-    
-    return table
-
-# コールバック: 発電機設定保存
-@app.callback(
-    [Output('generators-store', 'data'),
-     Output('generator-save-status', 'children')],
-    [Input('save-generators-btn', 'n_clicks')],
-    [State('generator-table', 'data')]
-)
-def save_generators(n_clicks, table_data):
-    """発電機設定を保存"""
-    if n_clicks is None or table_data is None:
-        return None, ""
-    
-    try:
-        generators = []
-        for row in table_data:
-            # a係数の処理（文字列から数値に変換）
-            heat_a_str = str(row.get('a係数', '1e-06'))
-            if 'e' in heat_a_str.lower():
-                heat_a = float(heat_a_str)
+            # モデル情報を読み込み
+            metadata_file = os.path.join(model_path, "model_metadata.json")
+            if os.path.exists(metadata_file):
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    model_info = json.load(f)
             else:
-                heat_a = float(heat_a_str)
+                # デフォルトのモデル情報
+                model_info = {
+                    'save_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'data_info': {'total_samples': 'Unknown'},
+                    'feature_columns': ['日射強度', 'PV出力', '気温', '湿度', '風速'],
+                    'location': '宮古島',
+                    'model_type': 'Real PV Predictor'
+                }
             
-            # マストランの処理
-            must_run_str = str(row.get('マストラン', 'False')).lower()
-            is_must_run = must_run_str in ['true', '1', 'yes', 'はい', 'on']
-            
-            generator = {
-                'name': row.get('名前', f"発電機{row.get('ID', 0)+1}"),
-                'unit_type': row.get('タイプ', 'DG'),
-                'min_output': float(row.get('最小出力(kW)', 1000)),
-                'max_output': float(row.get('最大出力(kW)', 5000)),
-                'priority': int(row.get('優先順位', 1)),
-                'min_run_time': float(row.get('最小運転時間(h)', 2.0)),
-                'min_stop_time': float(row.get('最小停止時間(h)', 1.0)),
-                'is_must_run': is_must_run,
-                'heat_rate_a': heat_a,
-                'heat_rate_b': float(row.get('b係数', 0.15)),
-                'heat_rate_c': float(row.get('c係数', 300)),
-                'fuel_price': float(row.get('燃料単価(円/kL)', 60354)),
-                'startup_cost': float(row.get('起動費(円)', 10000)),
-                'shutdown_cost': float(row.get('停止費(円)', 10000))
-            }
-            generators.append(generator)
-        
-        status = html.Div("✅ 発電機設定を保存しました", style={'color': 'green'})
-        return generators, status
-        
-    except Exception as e:
-        status = html.Div(f"❌ 発電機設定保存エラー: {e}", style={'color': 'red'})
-        return None, status
+            st.success("✅ 外部予測機の読み込みに成功しました")
+            return predictor, model_info
 
-# Unit Commitmentソルバー（簡略版）
-class SimpleUnitCommitmentSolver:
-    def __init__(self, config):
-        self.config = config
-    
-    def solve(self, generators, demand_data):
-        """簡略化された構成計算"""
-        time_steps = len(demand_data)
-        gen_count = len(generators)
-        
-        # 優先順位でソート
-        sorted_generators = sorted(generators, key=lambda x: x['priority'])
-        
-        # 出力フラグ初期化
-        output_flags = np.zeros((gen_count, time_steps), dtype=int)
-        
-        for t in range(time_steps):
-            demand = demand_data[t]
-            if np.isnan(demand):
-                continue
-            
-            # 必要な容量計算（マージン考慮）
-            required_capacity = demand * (1 + max(self.config['margin_dg'], self.config['margin_gt']))
-            
-            # 発電機を優先順位順に選択
-            cumulative_capacity = 0
-            
-            for i, gen in enumerate(sorted_generators):
-                if gen['is_must_run'] or cumulative_capacity < required_capacity:
-                    output_flags[i, t] = 1
-                    cumulative_capacity += gen['max_output']
-        
-        return {
-            'generators': sorted_generators,
-            'output_flags': output_flags.tolist(),  # numpy配列をリストに変換
-            'demand_data': demand_data,
-            'time_steps': time_steps
+        except Exception as e:
+            st.error(f"❌ モデル読み込みエラー: {e}")
+            st.code(traceback.format_exc())
+            return None, {}
+
+    def calculate_pv_output(self, irradiance_values):
+        """
+        宮古島全土の太陽光発電出力計算（日照時間考慮版）
+        """
+        try:
+            # 入力値の正規化
+            if isinstance(irradiance_values, (int, float)):
+                irradiance_values = [irradiance_values]
+            elif isinstance(irradiance_values, np.ndarray):
+                irradiance_values = irradiance_values.tolist()
+
+            # 宮古島の地域特性
+            miyako_location_factor = 0.95  # 様々な設置条件の平均
+
+            # 温度補正（宮古島の年平均気温23.6°C）
+            temp_coeff = -0.004
+            avg_temp = getattr(st.session_state, 'temperature', 23.6)
+            cell_temp = avg_temp + 25
+            temp_correction = 1 + temp_coeff * (cell_temp - 25)
+
+            # 季節・気象補正の取得
+            season_correction = self.get_season_correction()
+            weather_correction = self.get_weather_risk_correction()
+            operational_correction = getattr(st.session_state, 'operational_rate', 95.0) / 100
+
+            # 島全体の平均
+            avg_system_efficiency = 0.85
+
+            # PV出力計算
+            pv_outputs = []
+            for irradiance in irradiance_values:
+                try:
+                    irradiance_float = float(irradiance)
+
+                    # 日射強度が極めて低い場合（夜間）は出力を0にする
+                    if irradiance_float < 0.01:  # 0.01 kW/m²未満は夜間とみなす
+                        pv_outputs.append(0.0)
+                        continue
+
+                    # 宮古島全土の発電量計算（MW）
+                    output = (
+                            irradiance_float *
+                            st.session_state.pv_capacity *
+                            avg_system_efficiency *
+                            miyako_location_factor *
+                            temp_correction *
+                            season_correction *
+                            weather_correction *
+                            operational_correction
+                    )
+
+                    # 制限
+                    output = max(0, min(output, st.session_state.pv_capacity))
+                    pv_outputs.append(output)
+
+                except (ValueError, TypeError):
+                    pv_outputs.append(0.0)
+
+            return np.array(pv_outputs)
+
+        except Exception as e:
+            st.error(f"PV出力計算エラー: {e}")
+            return np.array([0.0] * len(irradiance_values) if isinstance(irradiance_values, list) else [0.0])
+
+    def get_season_correction(self):
+        """季節補正係数の取得"""
+        seasonal_factors = {
+            "春季（3-5月）": 1.0,
+            "夏季（6-8月）": 0.92,
+            "秋季（9-11月）": 1.05,
+            "冬季（12-2月）": 0.98
         }
+        return seasonal_factors.get(getattr(st.session_state, 'season_factor', '春季（3-5月）'), 1.0)
 
-# Economic Dispatchソルバー（簡略版）
-class SimpleEconomicDispatchSolver:
-    def __init__(self, config):
-        self.config = config
-    
-    def solve(self, uc_result):
-        """簡略化された経済配分計算"""
-        generators = uc_result['generators']
-        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
-        demand_data = uc_result['demand_data']
-        time_steps = uc_result['time_steps']
-        
-        gen_count = len(generators)
-        power_outputs = np.zeros((gen_count, time_steps))
-        lambda_values = np.zeros(time_steps)
-        
-        for t in range(time_steps):
-            demand = demand_data[t]
-            if np.isnan(demand):
-                continue
-            
-            # 運転中発電機を抽出
-            running_generators = []
-            for i, gen in enumerate(generators):
-                if output_flags[i, t] == 1:
-                    running_generators.append((i, gen))
-            
-            if not running_generators:
-                continue
-            
-            # 等配分方式（簡略化）
-            total_capacity = sum(gen['max_output'] for _, gen in running_generators)
-            
-            for i, gen in running_generators:
-                # 容量比例配分
-                allocation_ratio = gen['max_output'] / total_capacity
-                output = min(demand * allocation_ratio, gen['max_output'])
-                output = max(output, gen['min_output'])
-                power_outputs[i, t] = output
-            
-            # λ値計算（簡略化）
-            lambda_values[t] = 50.0  # 固定値
-        
-        # コスト計算
-        total_costs = self.calculate_costs(generators, power_outputs, output_flags)
-        
-        return {
-            'power_outputs': power_outputs.tolist(),  # numpy配列をリストに変換
-            'lambda_values': lambda_values.tolist(),  # numpy配列をリストに変換
-            'total_costs': total_costs
+    def get_weather_risk_correction(self):
+        """気象リスク補正係数の取得"""
+        weather_factors = {
+            "平常時": 1.0,
+            "台風接近": 0.3,
+            "梅雨期": 0.6,
+            "高温期": 0.88
         }
-    
-    def calculate_costs(self, generators, power_outputs, output_flags):
-        """コスト計算"""
-        time_steps = power_outputs.shape[1]
-        total_fuel_cost = 0
-        
-        for i, gen in enumerate(generators):
-            for t in range(time_steps):
-                if output_flags[i, t] == 1:
-                    power = power_outputs[i, t]
-                    # 燃料費計算
-                    fuel_consumption = (gen['heat_rate_a'] * power**2 + 
-                                      gen['heat_rate_b'] * power + 
-                                      gen['heat_rate_c'])
-                    cost = fuel_consumption * gen['fuel_price'] * 0.25
-                    total_fuel_cost += cost
-        
-        return {
-            'total_cost': total_fuel_cost,
-            'total_fuel_cost': total_fuel_cost,
-            'total_startup_cost': 0,
-            'total_shutdown_cost': 0,
-            'average_cost_per_hour': total_fuel_cost / 24
-        }
+        return weather_factors.get(getattr(st.session_state, 'weather_risk', '平常時'), 1.0)
 
-# コールバック: 計算実行
-@app.callback(
-    [Output('uc-result-store', 'data'),
-     Output('ed-result-store', 'data'),
-     Output('calculation-status', 'children'),
-     Output('results-section', 'style')],
-    [Input('run-uc-btn', 'n_clicks'),
-     Input('run-both-btn', 'n_clicks')],
-    [State('generators-store', 'data'),
-     State('demand-store', 'data'),
-     State('solver-config-store', 'data')]
-)
-def run_calculations(uc_clicks, both_clicks, generators, demand_data, config):
-    """計算を実行"""
-    ctx = callback_context
-    if not ctx.triggered:
-        return None, None, "", {'display': 'none'}
-    
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    if generators is None or demand_data is None:
-        missing = []
-        if generators is None:
-            missing.append("発電機設定")
-        if demand_data is None:
-            missing.append("需要データ")
-        
-        status = html.Div(f"⚠️ 以下の設定が必要です: {', '.join(missing)}", 
-                         style={'color': 'orange'})
-        return None, None, status, {'display': 'none'}
-    
-    try:
-        # Unit Commitment計算
-        uc_solver = SimpleUnitCommitmentSolver(config)
-        uc_result = uc_solver.solve(generators, demand_data)
-        
-        ed_result = None
-        if button_id == 'run-both-btn':
-            # Economic Dispatch計算
-            ed_solver = SimpleEconomicDispatchSolver(config)
-            ed_result = ed_solver.solve(uc_result)
-        
-        # ステータス表示
-        if button_id == 'run-uc-btn':
-            status = html.Div("✅ 構成計算完了！", style={'color': 'green'})
-        else:
-            status = html.Div("✅ 構成計算＋経済配分完了！", style={'color': 'green'})
-        
-        return uc_result, ed_result, status, {'display': 'block'}
-        
-    except Exception as e:
-        status = html.Div(f"❌ 計算エラー: {e}", style={'color': 'red'})
-        return None, None, status, {'display': 'none'}
+    def create_pv_system_form(self):
+        """
+        宮古島全土PVシステム仕様入力フォーム
+        """
+        st.subheader("🏝️ 宮古島全土PVシステム設定")
 
-# チャート作成関数
-def create_unit_commitment_chart(uc_result):
-    """構成計算チャートを作成"""
-    if not uc_result:
-        return go.Figure()
-    
-    generators = uc_result['generators']
-    output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
-    demand_data = uc_result['demand_data']
-    time_steps = uc_result['time_steps']
-    
-    # 時間軸作成
-    time_labels = []
-    for i in range(time_steps):
-        hour = (i * 15) // 60
-        minute = (i * 15) % 60
-        time_labels.append(f"{hour:02d}:{minute:02d}")
-    
-    # サブプロット作成
-    fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=('発電機構成・需要', '発電機状態'),
-        row_heights=[0.7, 0.3],
-        vertical_spacing=0.1
-    )
-    
-    # 色設定
-    colors = px.colors.qualitative.Set3
-    
-    # 発電機出力の積み上げ
-    y_stack = np.zeros(time_steps)
-    
-    for i, gen in enumerate(generators):
-        y_values = []
-        for t in range(time_steps):
-            if output_flags[i, t] == 1:
-                y_values.append(gen['max_output'])
-            else:
-                y_values.append(0)
-        
-        y_upper = y_stack + np.array(y_values)
-        
-        fig.add_trace(
-            go.Scatter(
-                x=time_labels,
-                y=y_upper,
-                fill='tonexty' if i > 0 else 'tozeroy',
-                mode='none',
-                name=gen['name'],
-                fillcolor=colors[i % len(colors)],
-                hovertemplate=f'{gen["name"]}: %{{y:.0f}} kW<br>時刻: %{{x}}<extra></extra>'
-            ),
-            row=1, col=1
-        )
-        
-        y_stack = y_upper
-    
-    # 需要ライン
-    fig.add_trace(
-        go.Scatter(
-            x=time_labels,
-            y=demand_data,
-            mode='lines',
-            name='需要',
-            line=dict(color='red', width=3),
-            hovertemplate='需要: %{y:.0f} kW<br>時刻: %{x}<extra></extra>'
-        ),
-        row=1, col=1
-    )
-    
-    # 発電機状態表示（下段）
-    for i, gen in enumerate(generators):
-        status_text = []
-        for t in range(time_steps):
-            if output_flags[i, t] == 0:
-                status_text.append('停止')
-            elif output_flags[i, t] == 1:
-                status_text.append('運転')
-            else:
-                status_text.append('起動中')
-        
-        fig.add_trace(
-            go.Scatter(
-                x=time_labels,
-                y=[i] * time_steps,
-                mode='markers',
-                marker=dict(
-                    color=[0 if s == '停止' else 1 if s == '運転' else 0.5 for s in status_text],
-                    colorscale=[[0, 'gray'], [0.5, 'orange'], [1, 'green']],
-                    size=8,
-                    symbol='square'
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write("**基本仕様**")
+
+            st.session_state.pv_capacity = st.number_input(
+                "総PV容量 (MW)",
+                min_value=1.0,
+                max_value=1000.0,
+                value=float(st.session_state.pv_capacity),
+                step=1.0,
+                help="宮古島全土の太陽光発電システムの総容量"
+            )
+
+            # 宮古島地域特性（固定値）
+            st.info("📍 **宮古島地域特性（固定値）**")
+            st.write(f"- 緯度: 24.8°N（最適傾斜角: 25°）")
+            st.write(f"- 年間日射量: 1,600 kWh/m²")
+            st.write(f"- 平均気温: 23.6°C")
+            st.write(f"- 特徴: 亜熱帯海洋性気候")
+
+        with col2:
+            st.write("**地域気象条件**")
+
+            # 季節要因
+            st.session_state.season_factor = st.selectbox(
+                "季節要因",
+                ["春季（3-5月）", "夏季（6-8月）", "秋季（9-11月）", "冬季（12-2月）"],
+                index=["春季（3-5月）", "夏季（6-8月）", "秋季（9-11月）", "冬季（12-2月）"].index(
+                    st.session_state.season_factor
                 ),
-                name=f'{gen["name"]}_状態',
-                text=status_text,
-                hovertemplate=f'{gen["name"]}: %{{text}}<br>時刻: %{{x}}<extra></extra>',
-                showlegend=False
-            ),
-            row=2, col=1
-        )
-    
-    # レイアウト設定
-    fig.update_layout(
-        title='発電機構成計算結果',
-        height=800,
-        hovermode='x unified'
-    )
-    
-    fig.update_xaxes(title_text="時刻", row=2, col=1)
-    fig.update_yaxes(title_text="出力 (kW)", row=1, col=1)
-    fig.update_yaxes(
-        title_text="発電機",
-        row=2, col=1,
-        tickmode='array',
-        tickvals=list(range(len(generators))),
-        ticktext=[gen['name'] for gen in generators]
-    )
-    
-    return fig
+                help="宮古島の季節による発電効率の変動"
+            )
 
-def create_economic_dispatch_chart(uc_result, ed_result):
-    """経済配分チャートを作成"""
-    if not uc_result or not ed_result:
-        return go.Figure()
-    
-    generators = uc_result['generators']
-    power_outputs = np.array(ed_result['power_outputs'])  # リストをnumpy配列に変換
-    lambda_values = ed_result['lambda_values']
-    demand_data = uc_result['demand_data']
-    time_steps = uc_result['time_steps']
-    
-    # 時間軸作成
-    time_labels = []
-    for i in range(time_steps):
-        hour = (i * 15) // 60
-        minute = (i * 15) % 60
-        time_labels.append(f"{hour:02d}:{minute:02d}")
-    
-    # サブプロット作成
-    fig = make_subplots(
-        rows=3, cols=1,
-        subplot_titles=('発電機出力配分', 'λ値推移', '燃料費'),
-        row_heights=[0.5, 0.25, 0.25],
-        vertical_spacing=0.08
-    )
-    
-    # 色設定
-    colors = px.colors.qualitative.Set3
-    
-    # 発電機出力の積み上げ棒グラフ
-    for i, gen in enumerate(generators):
-        y_values = power_outputs[i, :]
-        
-        fig.add_trace(
-            go.Bar(
-                x=time_labels,
-                y=y_values,
-                name=gen['name'],
-                marker_color=colors[i % len(colors)],
-                hovertemplate=f'{gen["name"]}: %{{y:.1f}} kW<br>時刻: %{{x}}<extra></extra>',
-                opacity=0.8
-            ),
-            row=1, col=1
-        )
-    
-    # 需要ライン
-    fig.add_trace(
-        go.Scatter(
-            x=time_labels,
-            y=demand_data,
-            mode='lines',
-            name='需要',
-            line=dict(color='red', width=3, dash='dash'),
-            hovertemplate='需要: %{y:.1f} kW<br>時刻: %{x}<extra></extra>'
-        ),
-        row=1, col=1
-    )
-    
-    # λ値推移
-    fig.add_trace(
-        go.Scatter(
-            x=time_labels,
-            y=lambda_values,
-            mode='lines+markers',
-            name='λ値',
-            line=dict(color='purple', width=2),
-            marker=dict(size=4),
-            hovertemplate='λ値: %{y:.3f}<br>時刻: %{x}<extra></extra>',
-            showlegend=False
-        ),
-        row=2, col=1
-    )
-    
-    # 燃料費（固定値として表示）
-    hourly_costs = [ed_result['total_costs']['average_cost_per_hour']] * time_steps
-    
-    fig.add_trace(
-        go.Scatter(
-            x=time_labels,
-            y=hourly_costs,
-            mode='lines',
-            name='燃料費',
-            line=dict(color='orange', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(255, 165, 0, 0.3)',
-            hovertemplate='燃料費: %{y:.0f} 円/h<br>時刻: %{x}<extra></extra>',
-            showlegend=False
-        ),
-        row=3, col=1
-    )
-    
-    # レイアウト設定
-    fig.update_layout(
-        title='経済配分計算結果',
-        height=900,
-        hovermode='x unified',
-        barmode='stack'
-    )
-    
-    fig.update_xaxes(title_text="時刻", row=3, col=1)
-    fig.update_yaxes(title_text="出力 (kW)", row=1, col=1)
-    fig.update_yaxes(title_text="λ値", row=2, col=1)
-    fig.update_yaxes(title_text="燃料費 (円/h)", row=3, col=1)
-    
-    return fig
+            # 台風・気象リスク
+            st.session_state.weather_risk = st.selectbox(
+                "気象リスク",
+                ["平常時", "台風接近", "梅雨期", "高温期"],
+                index=["平常時", "台風接近", "梅雨期", "高温期"].index(
+                    st.session_state.weather_risk
+                ),
+                help="特殊気象条件による発電への影響"
+            )
 
-# コールバック: 結果表示
-@app.callback(
-    Output('result-content', 'children'),
-    [Input('result-tabs', 'value')],
-    [State('uc-result-store', 'data'),
-     State('ed-result-store', 'data')]
-)
-def display_results(active_tab, uc_result, ed_result):
-    """結果を表示"""
-    if not uc_result:
-        return html.Div("計算結果がありません。", style={'color': 'gray'})
-    
-    if active_tab == 'uc-tab':
-        # 構成計算結果
-        fig = create_unit_commitment_chart(uc_result)
-        
-        # 統計情報
-        generators = uc_result['generators']
-        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
-        
-        running_units_per_time = []
-        for t in range(96):
-            running_count = np.sum(output_flags[:, t] == 1)
-            running_units_per_time.append(running_count)
-        
-        min_running = min(running_units_per_time)
-        max_running = max(running_units_per_time)
-        avg_running = np.mean(running_units_per_time)
-        efficiency = (1 - avg_running / len(generators)) * 100
-        
-        min_running = min(running_units_per_time)
-        max_running = max(running_units_per_time)
-        avg_running = np.mean(running_units_per_time)
-        efficiency = (1 - avg_running / len(generators)) * 100
-        
-        stats = html.Div([
-            html.H3("⚙️ 最小台数構成分析"),
-            html.Div([
-                html.Div([
-                    html.H4(f"{min_running} 台"),
-                    html.P("最小運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{max_running} 台"),
-                    html.P("最大運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{avg_running:.1f} 台"),
-                    html.P("平均運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{efficiency:.1f}%"),
-                    html.P("構成効率")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-            ], style={'margin': '1rem 0'})
-        ])
-        
-        return html.Div([
-            dcc.Graph(figure=fig),
-            stats
-        ])
-    
-    elif active_tab == 'ed-tab':
-        # 経済配分結果
-        if not ed_result:
-            return html.Div("経済配分計算が実行されていません。", style={'color': 'orange'})
-        
-        fig = create_economic_dispatch_chart(uc_result, ed_result)
-        
-        # 経済統計
-        costs = ed_result['total_costs']
-        lambda_values = np.array(ed_result['lambda_values'])  # リストをnumpy配列に変換
-        
-        stats = html.Div([
-            html.H3("💰 経済配分統計"),
-            html.Div([
-                html.Div([
-                    html.H4(f"{lambda_values.min():.3f}"),
-                    html.P("λ最小値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{lambda_values.max():.3f}"),
-                    html.P("λ最大値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{lambda_values.mean():.3f}"),
-                    html.P("λ平均値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{costs['total_cost']:.0f} 円"),
-                    html.P("総コスト")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{costs['average_cost_per_hour']:.0f} 円/時"),
-                    html.P("平均コスト")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-            ], style={'margin': '1rem 0'})
-        ])
-        
-        return html.Div([
-            dcc.Graph(figure=fig),
-            stats
-        ])[:, t] == 1)
-            running_units_per_time.append(running_count)
-        
-        min_running = min(running_units_per_time)
-        max_running = max(running_units_per_time)
-        avg_running = np.mean(running_units_per_time)
-        efficiency = (1 - avg_running / len(generators)) * 100
-        
-        stats = html.Div([
-            html.H3("⚙️ 最小台数構成分析"),
-            html.Div([
-                html.Div([
-                    html.H4(f"{min_running} 台"),
-                    html.P("最小運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{max_running} 台"),
-                    html.P("最大運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{avg_running:.1f} 台"),
-                    html.P("平均運転台数")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{efficiency:.1f}%"),
-                    html.P("構成効率")
-                ], style={'width': '24%', 'display': 'inline-block', 'text-align': 'center'}),
-            ], style={'margin': '1rem 0'})
-        ])
-        
-        return html.Div([
-            dcc.Graph(figure=fig),
-            stats
-        ])
-    
-    elif active_tab == 'ed-tab':
-        # 経済配分結果
-        if not ed_result:
-            return html.Div("経済配分計算が実行されていません。", style={'color': 'orange'})
-        
-        fig = create_economic_dispatch_chart(uc_result, ed_result)
-        
-        # 経済統計
-        costs = ed_result['total_costs']
-        lambda_values = ed_result['lambda_values']
-        
-        stats = html.Div([
-            html.H3("💰 経済配分統計"),
-            html.Div([
-                html.Div([
-                    html.H4(f"{lambda_values.min():.3f}"),
-                    html.P("λ最小値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{lambda_values.max():.3f}"),
-                    html.P("λ最大値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{lambda_values.mean():.3f}"),
-                    html.P("λ平均値")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{costs['total_cost']:.0f} 円"),
-                    html.P("総コスト")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-                html.Div([
-                    html.H4(f"{costs['average_cost_per_hour']:.0f} 円/時"),
-                    html.P("平均コスト")
-                ], style={'width': '19%', 'display': 'inline-block', 'text-align': 'center'}),
-            ], style={'margin': '1rem 0'})
-        ])
-        
-        return html.Div([
-            dcc.Graph(figure=fig),
-            stats
-        ])
-    
-    elif active_tab == 'stats-tab':
-        # 統計情報テーブル
-        generators = uc_result['generators']
-        output_flags = np.array(uc_result['output_flags'])  # リストをnumpy配列に変換
-        
-        stats_data = []
-        for i, gen in enumerate(generators):
-            running_steps = np.sum(output_flags[i, :] == 1)
-            running_hours = running_steps * 0.25
-            utilization = (running_steps / 96) * 100
-            
-            # 起動回数計算
-            start_count = 0
-            for j in range(1, 96):
-                if output_flags[i, j] == 1 and output_flags[i, j-1] == 0:
-                    start_count += 1
-            
-            row_data = {
-                '発電機': gen['name'],
-                'タイプ': gen['unit_type'],
-                '優先順位': gen['priority'],
-                '運転時間': f"{running_hours:.1f}h",
-                '稼働率': f"{utilization:.1f}%",
-                '起動回数': start_count,
-                'マストラン': '○' if gen['is_must_run'] else '×'
+            # 島全体の稼働率
+            st.session_state.operational_rate = st.slider(
+                "システム稼働率 (%)",
+                min_value=80.0,
+                max_value=100.0,
+                value=float(st.session_state.operational_rate),
+                step=1.0,
+                help="メンテナンス・故障等を考慮した全体稼働率"
+            )
+
+            # 総合効率の計算と表示
+            season_correction = self.get_season_correction()
+            weather_correction = self.get_weather_risk_correction()
+
+            total_efficiency = (
+                    season_correction *
+                    weather_correction *
+                    st.session_state.operational_rate / 100
+            )
+
+            st.session_state.total_efficiency = total_efficiency
+
+            st.write("**総合発電効率**")
+            if total_efficiency > 0.15:
+                st.success(f"🌟 高効率: {total_efficiency:.1%}")
+            elif total_efficiency > 0.12:
+                st.info(f"✅ 標準効率: {total_efficiency:.1%}")
+            else:
+                st.warning(f"⚠️ 低効率: {total_efficiency:.1%}")
+
+        return True
+
+    def create_input_data_form(self):
+        """
+        宮古島向け入力データフォームの作成（Open-Meteo API対応修正版）
+        """
+        st.subheader("📊 予測用データ入力")
+
+        # PVシステム仕様入力
+        self.create_pv_system_form()
+
+        # タブで入力方法を選択
+        tab1, tab2, tab3 = st.tabs(["手動入力", "Open-Meteo API", "CSVファイルアップロード"])
+
+        input_data = None
+
+        with tab1:
+            input_data = self._manual_input_form()
+
+        with tab2:
+            # APIデータが準備されているかチェック
+            if 'api_prediction_data' in st.session_state and st.session_state.api_prediction_data is not None:
+                st.success("🎉 予測データが準備されています！")
+                st.info("⬇️ 下記で予測結果を確認してください")
+                input_data = st.session_state.api_prediction_data
+            else:
+                # APIフォームを表示
+                temp_data = self._openmeteo_input_form()
+                if temp_data is not None:
+                    input_data = temp_data
+
+        with tab3:
+            input_data = self._csv_input_form()
+
+        return input_data
+
+    def _manual_input_form(self):
+        """手動入力フォーム"""
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write("**基本情報**")
+
+            st.session_state.prediction_date = st.date_input(
+                "予測基準日",
+                value=st.session_state.prediction_date
+            )
+
+            st.session_state.prediction_time = st.time_input(
+                "予測基準時刻",
+                value=st.session_state.prediction_time
+            )
+
+            st.session_state.num_points = st.slider(
+                "予測データ点数",
+                1, 10,
+                value=int(st.session_state.num_points)
+            )
+
+            st.write("**現在の気象条件**")
+
+            st.session_state.current_irradiance = st.number_input(
+                "現在の日射強度 (kW/m²)",
+                min_value=0.0,
+                max_value=1.2,
+                value=float(st.session_state.current_irradiance),
+                step=0.01,
+                help="0.0（夜間）〜 1.0（快晴時）"
+            )
+
+            # 現在のPV出力を計算して表示
+            current_pv_calc = self.calculate_pv_output([st.session_state.current_irradiance])[0]
+            st.info(f"💡 計算PV出力: {current_pv_calc:.1f} MW")
+
+            # PV出力を日射強度と連動させるかのオプション
+            auto_pv = st.checkbox("PV出力を自動計算", value=True)
+
+            if auto_pv:
+                st.session_state.current_pv = current_pv_calc
+                st.write(f"現在のPV出力: {st.session_state.current_pv:.1f} MW (自動計算)")
+            else:
+                st.session_state.current_pv = st.number_input(
+                    "現在のPV出力 (MW)",
+                    min_value=0.0,
+                    max_value=float(st.session_state.pv_capacity),
+                    value=float(min(st.session_state.current_pv, st.session_state.pv_capacity)),
+                    step=1.0
+                )
+
+        with col2:
+            st.write("**天候条件**")
+
+            st.session_state.weather_condition = st.selectbox(
+                "天候",
+                ["晴れ", "曇り", "雨", "その他"],
+                index=["晴れ", "曇り", "雨", "その他"].index(st.session_state.weather_condition)
+            )
+
+            st.session_state.cloud_cover = st.slider(
+                "雲量（%）",
+                0, 100,
+                value=int(st.session_state.cloud_cover)
+            )
+
+            st.session_state.temperature = st.number_input(
+                "気温（℃）",
+                min_value=10.0,
+                max_value=40.0,
+                value=float(st.session_state.temperature),
+                step=0.5,
+                help="宮古島の気温範囲: 10-40°C"
+            )
+
+            # 発電効率の表示
+            temp_coeff = -0.004
+            cell_temp = st.session_state.temperature + 25
+            temp_correction = 1 + temp_coeff * (cell_temp - 25)
+            season_correction = self.get_season_correction()
+            weather_correction = self.get_weather_risk_correction()
+
+            total_efficiency = temp_correction * season_correction * weather_correction
+
+            st.write("**現在の発電効率**")
+            if total_efficiency > 1.0:
+                st.success(f"🌟 高効率: {total_efficiency:.1%}")
+            elif total_efficiency < 0.7:
+                st.error(f"⚠️ 低効率: {total_efficiency:.1%}")
+            else:
+                st.info(f"✅ 標準効率: {total_efficiency:.1%}")
+
+        # 予測実行ボタン
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+
+        with col_btn1:
+            if st.button("🔄 設定をリセット"):
+                self.reset_input_values()
+                st.rerun()
+
+        with col_btn2:
+            if st.button("💾 設定を保存"):
+                self.save_current_settings()
+                st.success("設定を保存しました！")
+
+        with col_btn3:
+            if st.button("📈 手動データで予測実行", type="primary"):
+                # 手動入力データから予測用データフレームを作成
+                input_data = self.create_prediction_data_from_input()
+                return input_data
+
+        return None
+
+    def _openmeteo_input_form(self):
+        """Open-Meteo API入力フォーム（修正版）"""
+        try:
+            st.write("**🌐 Open-Meteo APIから実際の気象データを取得**")
+
+            # API機能が無効の場合の警告
+            if not st.session_state.api_enabled:
+                st.warning(
+                    "⚠️ Open-Meteo API機能が無効です。サイドバーで「Open-Meteo API使用」にチェックを入れてください。")
+                return None
+
+            # API接続状況の表示
+            st.info("📍 **対象地域:** 宮古島 (北緯24.8°, 東経125.3°)")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write("**データ取得設定**")
+
+                # 期間選択
+                data_type = st.selectbox(
+                    "データタイプ",
+                    ["1時間間隔日射強度取得", "現在+直近24時間", "過去1週間", "過去1ヶ月", "カスタム期間"],
+                    help="取得する気象データの期間を選択",
+                    key="api_data_type_openmeteo"
+                )
+
+                if data_type == "カスタム期間":
+                    start_date = st.date_input(
+                        "開始日",
+                        value=datetime.now().date() - timedelta(days=7),
+                        max_value=datetime.now().date(),
+                        key="api_start_date_openmeteo"
+                    )
+                    end_date = st.date_input(
+                        "終了日",
+                        value=datetime.now().date(),
+                        max_value=datetime.now().date(),
+                        key="api_end_date_openmeteo"
+                    )
+                else:
+                    end_date = datetime.now().date()
+                    if data_type == "現在+直近24時間":
+                        start_date = end_date - timedelta(days=1)
+                    elif data_type == "過去1週間":
+                        start_date = end_date - timedelta(days=7)
+                    elif data_type == "1時間間隔日射強度取得":
+                        start_date = end_date
+                    else:  # 過去1ヶ月
+                        start_date = end_date - timedelta(days=30)
+
+                st.info(f"📅 期間: {start_date} 〜 {end_date}")
+
+                # データ取得ボタン
+                if st.button("🌤️ 気象データを取得", type="primary", key="fetch_weather_btn_openmeteo"):
+                    with st.spinner("🌐 Open-Meteo APIからデータ取得中..."):
+                        try:
+                            # API初期化の確認
+                            if not hasattr(self, 'weather_api') or self.weather_api is None:
+                                self.weather_api = OpenMeteoWeatherAPI()
+
+                            # データタイプに応じてデータ取得
+                            if data_type == "1時間間隔日射強度取得":
+                                # 本日の1時間間隔データを取得
+                                weather_data = self.weather_api.get_today_hourly_data()
+                                data_source = "1時間間隔日射強度データ (本日、15分補間済み)"
+                            elif data_type == "現在+直近24時間":
+                                # forecast エンドポイントを使用
+                                weather_data = self.weather_api.get_forecast_data(past_days=1)
+                                data_source = "Forecast API (1時間間隔)"
+                            else:
+                                # archive エンドポイントを使用
+                                weather_data = self.weather_api.get_historical_weather(
+                                    datetime.combine(start_date, datetime.min.time()),
+                                    datetime.combine(end_date, datetime.max.time())
+                                )
+                                data_source = "Archive API (1時間間隔)"
+
+                            if weather_data is not None and len(weather_data) > 0:
+                                st.session_state.openmeteo_data = weather_data
+                                st.session_state.use_openmeteo = True
+                                st.success(f"✅ {len(weather_data)}件のデータを取得しました！（{data_source}）")
+
+                                # 取得したAPIのURLを表示
+                                api_url = f"https://api.open-meteo.com/v1/forecast?latitude={self.weather_api.latitude}&longitude={self.weather_api.longitude}&hourly=temperature_2m,shortwave_radiation&timezone=Asia%2FTokyo&past_days=1"
+                                st.info(f"🔗 使用API URL: {api_url}")
+
+                                st.rerun()  # 画面を更新
+                            else:
+                                st.error("❌ データ取得に失敗しました（データが空です）")
+                        except Exception as e:
+                            st.error(f"気象データ更新エラー: {str(e)}")
+
+                # APIテストボタンを追加
+                if st.button("🔧 API接続テスト", key="test_api_btn_openmeteo"):
+                    with st.spinner("API接続テスト中..."):
+                        try:
+                            if not hasattr(self, 'weather_api') or self.weather_api is None:
+                                self.weather_api = OpenMeteoWeatherAPI()
+
+                            test_result = self.weather_api.test_api_connection()
+
+                            if test_result['success']:
+                                st.success("✅ API接続成功！")
+                                st.info(f"📊 Hourlyデータ: {'有' if test_result['has_hourly'] else '無'}")
+                                st.info(f"📊 Currentデータ: {'有' if test_result['has_current'] else '無'}")
+                                st.info(f"📊 日射量データ: {'有' if test_result['has_shortwave'] else '無'}")
+                                st.code(f"URL: {test_result['url']}")
+                                if 'note' in test_result:
+                                    st.info(f"ℹ️ {test_result['note']}")
+                            else:
+                                st.error(f"❌ API接続失敗: {test_result['error']}")
+                                st.code(f"試行URL: {test_result['url']}")
+                                if 'note' in test_result:
+                                    st.warning(f"⚠️ {test_result['note']}")
+                        except Exception as e:
+                            st.error(f"テストエラー: {str(e)}")
+
+            with col2:
+                st.write("**現在の宮古島気象情報**")
+
+                # 現在の気象データ取得
+                if st.button("🔄 現在の気象データを更新", key="update_current_weather_btn_openmeteo"):
+                    with st.spinner("現在の気象データ取得中..."):
+                        try:
+                            # API初期化の確認
+                            if not hasattr(self, 'weather_api') or self.weather_api is None:
+                                self.weather_api = OpenMeteoWeatherAPI()
+
+                            current_weather = self.weather_api.get_current_weather()
+
+                            if current_weather:
+                                st.session_state.current_irradiance = max(0, current_weather['irradiance'])
+                                st.session_state.temperature = current_weather['temperature']
+                                st.session_state.cloud_cover = current_weather['cloud_cover']
+
+                                st.success("現在の気象データを更新しました！")
+
+                                # 更新された値を表示
+                                st.write("**更新された値:**")
+                                st.write(f"- 日射強度: {current_weather['irradiance']:.3f} kW/m²")
+                                st.write(f"- 気温: {current_weather['temperature']:.1f}°C")
+                                st.write(f"- 雲量: {current_weather['cloud_cover']:.0f}%")
+                                st.write(f"- 湿度: {current_weather['humidity']:.0f}%")
+
+                                st.rerun()
+                            else:
+                                st.error("現在の気象データ取得に失敗しました")
+                        except Exception as e:
+                            st.error(f"気象データ更新エラー: {str(e)}")
+
+                # 現在値表示
+                st.write("**現在の設定値:**")
+                st.metric("日射強度", f"{st.session_state.current_irradiance:.3f} kW/m²")
+                st.metric("気温", f"{st.session_state.temperature:.1f}°C")
+                st.metric("雲量", f"{st.session_state.cloud_cover:.0f}%")
+
+                if st.session_state.use_openmeteo:
+                    st.success("📡 API連携中")
+                else:
+                    st.info("📝 手動入力中")
+
+            # 取得したデータの表示と予測実行
+            if hasattr(st.session_state, 'openmeteo_data') and st.session_state.openmeteo_data is not None:
+                st.markdown("---")
+                st.write("**📋 取得した気象データ**")
+
+                # データの概要表示
+                data = st.session_state.openmeteo_data
+
+                # データが存在することを確認
+                if len(data) > 0:
+                    st.write("**データ概要:**")
+                    st.metric("データ件数", f"{len(data):,}件")
+
+                    avg_irradiance = data['日射強度'].mean()
+                    st.metric("平均日射強度", f"{avg_irradiance:.3f} kW/m²")
+
+                    max_irradiance = data['日射強度'].max()
+                    st.metric("最大日射強度", f"{max_irradiance:.3f} kW/m²")
+
+                    avg_temp = data['temperature'].mean()
+                    st.metric("平均気温", f"{avg_temp:.1f}°C")
+
+                    # データテーブル表示（最新50件）
+                    st.write("**最新のデータ（50件）:**")
+                    try:
+                        display_cols = []
+                        available_cols = ['datetime', '日射強度', 'temperature', 'cloud_cover', 'humidity']
+                        display_names = ['時刻', '日射強度(kW/m²)', '気温(°C)', '雲量(%)', '湿度(%)']
+
+                        # 利用可能な列のみを選択
+                        for i, col in enumerate(available_cols):
+                            if col in data.columns:
+                                display_cols.append(col)
+
+                        if len(display_cols) > 0:
+                            display_data = data.tail(50)[display_cols].copy()
+                            display_data['datetime'] = display_data['datetime'].dt.strftime('%Y-%m-%d %H:%M')
+
+                            # 列名を日本語に変更
+                            new_column_names = {}
+                            for i, col in enumerate(display_cols):
+                                if i < len(display_names):
+                                    new_column_names[col] = display_names[i]
+                            display_data.rename(columns=new_column_names, inplace=True)
+
+                            st.dataframe(display_data, use_container_width=True)
+                        else:
+                            st.warning("表示可能な列が見つかりません")
+                            st.write("**利用可能な列:**", list(data.columns))
+
+                    except Exception as display_error:
+                        st.error(f"データ表示エラー: {display_error}")
+                        st.write("**利用可能な列:**", list(data.columns))
+
+                    # 予測実行ボタン
+                    st.write("**予測実行設定:**")
+
+                    data_points = st.slider(
+                        "使用するデータ点数",
+                        min_value=10,
+                        max_value=min(100, len(data)),
+                        value=min(50, len(data)),
+                        help="最新データから遡って使用する点数",
+                        key="api_data_points_slider_openmeteo"
+                    )
+
+                    if st.button("🚀 Open-Meteoデータで予測実行", type="primary", key="api_prediction_btn_openmeteo"):
+                        with st.spinner("予測データを準備中..."):
+                            try:
+                                # 最新のdata_points件を取得
+                                prediction_data = data.tail(data_points).copy()
+                                st.info(f"📊 取得データ: {len(prediction_data)}件")
+
+                                # 特徴量エンジニアリング
+                                st.info("🔧 特徴量エンジニアリング実行中...")
+                                prediction_data = self.add_time_features(prediction_data)
+                                prediction_data = self.add_lag_features(prediction_data)
+                                prediction_data = self.add_moving_average_features(prediction_data)
+                                prediction_data = self.add_difference_features(prediction_data)
+
+                                # セッション状態に保存して再実行を促す
+                                st.session_state.api_prediction_data = prediction_data
+
+                                st.success(f"✅ {len(prediction_data)}件のデータで予測準備完了")
+                                st.info("🔄 予測を実行するため、ページを再読み込みします...")
+
+                                # 強制的に再実行
+                                st.rerun()
+
+                            except Exception as prediction_error:
+                                st.error(f"予測データ準備エラー: {prediction_error}")
+                                st.code(traceback.format_exc())
+                                return None
+                else:
+                    st.error("取得したデータが空です")
+            else:
+                st.info("💡 **使用方法:**")
+                st.write("1. 上記の設定でデータ期間を選択")
+                st.write("2. 「🌤️ 気象データを取得」ボタンをクリック")
+                st.write("3. データ取得後、予測実行ボタンが表示されます")
+                st.warning(
+                    "ℹ️ **注意**: 宮古島では15分間隔データは利用できないため、1時間間隔データを補間して使用します")
+
+            return None
+
+        except Exception as e:
+            st.error(f"Open-Meteo APIフォームエラー: {str(e)}")
+            st.code(traceback.format_exc())
+            return None
+
+    def _csv_input_form(self):
+        """CSVファイル入力フォーム"""
+        st.write("**CSVファイルからデータ読み込み**")
+        uploaded_file = st.file_uploader("CSVファイルを選択", type=['csv'])
+
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file, encoding='utf-8')
+                st.write("📋 読み込まれたデータ:")
+                st.dataframe(df.head(10))
+
+                if st.button("📊 CSVデータで予測実行", type="primary"):
+                    return df.head(10)
+
+            except Exception as e:
+                st.error(f"ファイル読み込みエラー: {e}")
+
+        return None
+
+    def create_prediction_data_from_input(self):
+        """
+        宮古島向け手動入力から予測用データを作成（日照時間考慮版）
+        """
+        try:
+            # 基準日時の作成
+            base_datetime = datetime.combine(
+                st.session_state.prediction_date,
+                st.session_state.prediction_time
+            )
+
+            # より多くのサンプルデータ生成（特徴量計算のため）
+            num_samples = max(st.session_state.num_points, 50)  # 最低50サンプル
+
+            data = []
+            for i in range(-48, num_samples):  # 過去48ポイントから現在まで
+                dt = base_datetime + timedelta(minutes=i*15)
+
+                # 宮古島の日照時間を考慮（日の出: 6:00、日の入り: 18:30頃）
+                hour = dt.hour + dt.minute / 60.0
+
+                # 日射強度の時間パターン（夜間は0）
+                if hour < 6.0 or hour > 18.5:
+                    # 夜間は日射強度0
+                    hour_factor = 0.0
+                else:
+                    # 日中の日射パターン（正弦波）
+                    solar_hour = (hour - 6.0) / 12.5  # 6:00を0、18:30を1とする正規化
+                    hour_factor = max(0, np.sin(np.pi * solar_hour))
+
+                # 季節変動
+                day_of_year = dt.timetuple().tm_yday
+                seasonal_factor = 0.8 + 0.2 * np.cos(2 * np.pi * (day_of_year - 180) / 365)
+
+                # 現在の入力値に基づく調整
+                base_irradiance = st.session_state.current_irradiance
+                base_pv = st.session_state.current_pv
+
+                # 時間とパターンに基づく値の生成
+                if hour_factor > 0:
+                    # 日中の場合
+                    irradiance = base_irradiance * hour_factor * seasonal_factor + np.random.normal(0, 0.03)
+                    irradiance = max(0, min(1.2, irradiance))
+
+                    pv_output = base_pv * hour_factor * seasonal_factor + np.random.normal(0, 2.0)
+                    pv_output = max(0, min(st.session_state.pv_capacity, pv_output))
+                else:
+                    # 夜間の場合
+                    irradiance = 0.0
+                    pv_output = 0.0
+
+                data.append({
+                    'datetime': dt,
+                    '日射強度': irradiance,
+                    'PV出力': pv_output,
+                    '気温': st.session_state.temperature + np.random.normal(0, 1),
+                    '湿度': 75.0 + np.random.normal(0, 3)  # 宮古島の高湿度
+                })
+
+            input_data = pd.DataFrame(data)
+
+            # 天候に応じた調整（夜間以外のみ）
+            weather_factors = {
+                "晴れ": 1.0,
+                "曇り": 0.7,
+                "雨": 0.3,
+                "その他": 0.5
             }
-            
-            # 経済配分結果がある場合は出力統計も追加
-            if ed_result:
-                power_outputs = np.array(ed_result['power_outputs'])  # リストをnumpy配列に変換
-                running_outputs = power_outputs[i, power_outputs[i, :] > 0]
-                if len(running_outputs) > 0:
-                    avg_output = np.mean(running_outputs)
-                    max_output = np.max(power_outputs[i, :])
-                    total_generation = np.sum(power_outputs[i, :]) * 0.25
-                    
-                    row_data.update({
-                        '平均出力': f"{avg_output:.1f} kW",
-                        '最大出力': f"{max_output:.1f} kW",
-                        '総発電量': f"{total_generation:.1f} kWh"
-                    })
-            
-            stats_data.append(row_data)
-        
-        # テーブル列設定
-        columns = [
-            {"name": "発電機", "id": "発電機"},
-            {"name": "タイプ", "id": "タイプ"},
-            {"name": "優先順位", "id": "優先順位"},
-            {"name": "運転時間", "id": "運転時間"},
-            {"name": "稼働率", "id": "稼働率"},
-            {"name": "起動回数", "id": "起動回数"},
-            {"name": "マストラン", "id": "マストラン"}
-        ]
-        
-        if ed_result:
-            columns.extend([
-                {"name": "平均出力", "id": "平均出力"},
-                {"name": "最大出力", "id": "最大出力"},
-                {"name": "総発電量", "id": "総発電量"}
-            ])
-        
-        table = dash_table.DataTable(
-            data=stats_data,
-            columns=columns,
-            style_cell={'textAlign': 'left'},
-            style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-            style_table={'margin': '1rem 0'}
-        )
-        
-        return html.Div([
-            html.H3("📊 運転統計"),
-            table
-        ])
-    
-    return html.Div()
 
-if __name__ == '__main__':
-    app.run(debug=True)
+            factor = weather_factors.get(st.session_state.weather_condition, 0.5)
+            # 日射強度が0でない場合のみ天候補正を適用
+            mask = input_data['日射強度'] > 0
+            input_data.loc[mask, '日射強度'] *= factor
+            input_data.loc[mask, 'PV出力'] *= factor
+
+            # 特徴量エンジニアリングの追加
+            input_data = self.add_time_features(input_data)
+            input_data = self.add_lag_features(input_data)
+            input_data = self.add_moving_average_features(input_data)
+            input_data = self.add_difference_features(input_data)
+            # 予測用に最新のnum_pointsだけを返す
+            return input_data.tail(st.session_state.num_points).reset_index(drop=True)
+
+        except Exception as e:
+            st.error(f"データ作成エラー: {e}")
+            import traceback
+            st.code(f"Error details: {traceback.format_exc()}")
+            return None
+
+    def add_time_features(self, df):
+        """時間特徴量の追加"""
+        try:
+            df['hour'] = df['datetime'].dt.hour
+            df['minute'] = df['datetime'].dt.minute
+            df['day_of_year'] = df['datetime'].dt.dayofyear
+            df['day_of_week'] = df['datetime'].dt.dayofweek
+
+            # 周期的特徴量
+            df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+            df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+            df['day_sin'] = np.sin(2 * np.pi * df['day_of_year'] / 365)
+            df['day_cos'] = np.cos(2 * np.pi * df['day_of_year'] / 365)
+
+            return df
+        except Exception as e:
+            st.error(f"時間特徴量追加エラー: {e}")
+            return df
+
+    def add_lag_features(self, df):
+        """ラグ特徴量の追加"""
+        try:
+            lags = [1, 2, 3, 4, 8, 12, 24, 48]
+
+            for lag in lags:
+                df[f'irradiance_lag_{lag}'] = df['日射強度'].shift(lag)
+                df[f'pv_lag_{lag}'] = df['PV出力'].shift(lag)
+
+            # 欠損値を前方埋めで補完
+            for lag in lags:
+                df[f'irradiance_lag_{lag}'].fillna(df['日射強度'].iloc[0], inplace=True)
+                df[f'pv_lag_{lag}'].fillna(df['PV出力'].iloc[0], inplace=True)
+
+            return df
+        except Exception as e:
+            st.error(f"ラグ特徴量追加エラー: {e}")
+            return df
+
+    def add_moving_average_features(self, df):
+        """移動平均特徴量の追加"""
+        try:
+            windows = [4, 8, 12, 24]
+
+            for window in windows:
+                df[f'irradiance_ma_{window}'] = df['日射強度'].rolling(window=window, min_periods=1).mean()
+                df[f'pv_ma_{window}'] = df['PV出力'].rolling(window=window, min_periods=1).mean()
+
+            return df
+        except Exception as e:
+            st.error(f"移動平均特徴量追加エラー: {e}")
+            return df
+
+    def add_difference_features(self, df):
+        """差分特徴量の追加"""
+        try:
+            diffs = [1, 4]
+
+            for diff in diffs:
+                df[f'irradiance_diff_{diff}'] = df['日射強度'].diff(diff)
+                if diff == 1:  # pv_diff_1のみ追加
+                    df[f'pv_diff_{diff}'] = df['PV出力'].diff(diff)
+
+            # 欠損値を0で埋める
+            for diff in diffs:
+                df[f'irradiance_diff_{diff}'].fillna(0, inplace=True)
+                if diff == 1:
+                    df[f'pv_diff_{diff}'].fillna(0, inplace=True)
+
+            return df
+        except Exception as e:
+            st.error(f"差分特徴量追加エラー: {e}")
+            return df
+
+    def reset_input_values(self):
+        """入力値をデフォルトにリセット"""
+        st.session_state.prediction_date = datetime.now().date()
+        st.session_state.prediction_time = datetime.now().time()
+        st.session_state.num_points = 3
+        st.session_state.current_irradiance = 0.5
+        st.session_state.current_pv = 40.0
+        st.session_state.weather_condition = "晴れ"
+        st.session_state.cloud_cover = 30
+        st.session_state.temperature = 23.6  # 宮古島平均気温
+        st.session_state.forecast_steps = ["15分先", "30分先", "1時間先"]
+        st.session_state.season_factor = "春季（3-5月）"
+        st.session_state.weather_risk = "平常時"
+        st.session_state.operational_rate = 95.0
+
+    def save_current_settings(self):
+        """現在の設定をファイルに保存"""
+        settings = {
+            'current_irradiance': st.session_state.current_irradiance,
+            'current_pv': st.session_state.current_pv,
+            'weather_condition': st.session_state.weather_condition,
+            'cloud_cover': st.session_state.cloud_cover,
+            'temperature': st.session_state.temperature,
+            'forecast_steps': st.session_state.forecast_steps,
+            'num_points': st.session_state.num_points,
+            'season_factor': st.session_state.season_factor,
+            'weather_risk': st.session_state.weather_risk,
+            'operational_rate': st.session_state.operational_rate,
+            'pv_capacity': st.session_state.pv_capacity
+        }
+
+        try:
+            with open('miyako_pv_app_settings.json', 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2, default=str)
+        except Exception as e:
+            st.error(f"設定保存エラー: {e}")
+
+
+def create_prediction_chart_with_historical(input_data, predictions, forecast_labels, pv_capacity,
+                                            historical_data=None):
+    """
+    宮古島向け予測結果の統合グラフ作成（過去実績表示対応版）
+    """
+    fig = go.Figure()
+
+    # 基準時刻の取得
+    if hasattr(st.session_state, 'prediction_date') and hasattr(st.session_state, 'prediction_time'):
+        base_time = datetime.combine(st.session_state.prediction_date, st.session_state.prediction_time)
+    else:
+        base_time = input_data['datetime'].iloc[-1] if len(input_data) > 0 else datetime.now()
+
+# **1. 過去の日射実績データの表示（Open-Meteoデータ）**
+if historical_data is not None and len(historical_data) > 0:
+    try:
+        # 過去データを基準時刻より前のものに限定
+        past_data = historical_data[historical_data['datetime'] < base_time].copy()
+
+        if len(past_data) > 0:
+            # 過去の日射強度実績
+            fig.add_trace(go.Scatter(
+                x=past_data['datetime'],  # ✅【修正】正しい変数を使用
+                y=past_data['日射強度'],  # ✅【修正】正しい変数を使用
+                mode='lines',
+                name='📈 過去日射実績（Open-Meteo）',
+                line=dict(color='red', width=3, dash='dash'),
+                marker=dict(size=8, color='red'),
+                connectgaps=True,
+                hovertemplate='<b>予測値</b><br>' +
+                                  '時刻: %{x}<br>' +
+                                  '予測日射強度: %{y:.3f} kW/m²<extra></extra>'
+                ))
+                # 過去のPV出力実績
+                fig.add_trace(go.Scatter(
+                x=past_data['datetime'],
+                y=past_data['PV出力'],
+                mode='lines',
+                name='⚡ 過去PV出力実績',
+                line=dict(color='lightgreen', width=2),
+                opacity=0.7,
+                yaxis='y2',
+                hovertemplate='<b>過去PV実績</b><br>' +
+                                  '時刻: %{x}<br>' +
+                                  'PV出力: %{y:.1f} MW<extra></extra>'
+                ))
+
+                # 統計情報の表示
+                avg_past_irradiance = past_data['日射強度'].mean()
+                max_past_irradiance = past_data['日射強度'].max()
+
+                st.info(f"📊 **過去実績統計（{len(past_data)}件）**")
+                st.write(f"- 平均日射強度: {avg_past_irradiance:.3f} kW/m²")
+                st.write(f"- 最大日射強度: {max_past_irradiance:.3f} kW/m²")
+                st.write(
+                        f"- データ期間: {past_data['datetime'].min().strftime('%m/%d %H:%M')} 〜 {past_data['datetime'].max().strftime('%m/%d %H:%M')}")
+
+                except Exception as hist_error:
+                st.warning(f"過去データ表示エラー: {hist_error}")
+
+    # **2. 現在の日射強度**
+    fig.add_trace(go.Scatter(
+        x=input_data['datetime'],
+        y=input_data['日射強度'],
+        mode='lines+markers',
+        name='🌞 現在の日射強度',
+        line=dict(color='blue', width=3),
+        marker=dict(size=8, color='blue'),
+        hovertemplate='<b>現在データ</b><br>' +
+                      '時刻: %{x}<br>' +
+                      '日射強度: %{y:.3f} kW/m²<extra></extra>'
+    ))
+
+    # **3. 現在のPV出力**
+    fig.add_trace(go.Scatter(
+        x=input_data['datetime'],
+        y=input_data['PV出力'],
+        mode='lines+markers',
+        name='🔋 現在のPV出力 (MW)',
+        line=dict(color='green', width=3),
+        marker=dict(size=8, color='green'),
+        yaxis='y2',
+        hovertemplate='<b>現在PV出力</b><br>' +
+                      '時刻: %{x}<br>' +
+                      'PV出力: %{y:.1f} MW<extra></extra>'
+    ))
+
+    # **4. 予測データの処理と表示**
+    if predictions and len(predictions) > 0:
+        try:
+            # 予測時間軸をソート
+            sorted_predictions = sorted(predictions.items(), key=lambda x: int(x[0].replace('min', '')))
+
+            # 予測データの統合
+            future_times = []
+            future_irradiance = []
+            future_pv_output = []
+
+            for time_key, pred_values in sorted_predictions:
+                try:
+                    minutes_ahead = int(time_key.replace('min', ''))
+
+                    if pred_values is not None and hasattr(pred_values, '__len__') and len(pred_values) > 0:
+                        # 予測時刻
+                        future_time = base_time + timedelta(minutes=minutes_ahead)
+                        future_times.append(future_time)
+
+                        # 予測値の計算
+                        if isinstance(pred_values, (list, tuple)):
+                            avg_irradiance = np.mean([float(v) for v in pred_values])
+                        elif isinstance(pred_values, np.ndarray):
+                            avg_irradiance = float(np.mean(pred_values))
+                        else:
+                            avg_irradiance = float(pred_values)
+
+                        future_irradiance.append(avg_irradiance)
+
+                        # PV出力予測
+                        efficiency = getattr(st.session_state, 'total_efficiency', 0.16)
+                        pv_pred = avg_irradiance * pv_capacity * efficiency
+                        future_pv_output.append(pv_pred)
+
+                except Exception as item_error:
+                    continue
+
+            # **5. 予測線の表示（現在→未来への連続線）**
+            if len(future_times) > 0:
+                try:
+                    current_irradiance = float(st.session_state.current_irradiance)
+                    current_pv = float(st.session_state.current_pv)
+                except:
+                    current_irradiance = 0.5
+                    current_pv = 40.0
+
+# 日射強度予測線
+combined_times = [base_time] + future_times
+combined_irradiance = [current_irradiance] + future_irradiance
+
+fig.add_trace(go.Scatter(
+    x=combined_times,  # ✅【修正】正しい予測時間軸
+    y=combined_irradiance,  # ✅【修正】正しい予測値
+    mode='lines+markers',
+    name='🔮 日射強度予測',
+                    line=dict(color='lightblue', width=2),
+                    opacity=0.7,
+                    hovertemplate='<b>過去実績</b><br>' +
+                                  '時刻: %{x}<br>' +
+                                  '日射強度: %{y:.3f} kW/m²<extra></extra>'
+                ))
+
+                # PV出力予測線
+                combined_pv = [current_pv] + future_pv_output
+
+                fig.add_trace(go.Scatter(
+                    x=combined_times,
+                    y=combined_pv,
+                    mode='lines+markers',
+                    name='⚡ PV出力予測 (MW)',
+                    line=dict(color='orange', width=3, dash='dash'),
+                    marker=dict(size=8, color='orange'),
+                    yaxis='y2',
+                    connectgaps=True,
+                    hovertemplate='<b>PV予測</b><br>' +
+                                  '時刻: %{x}<br>' +
+                                  '予測PV出力: %{y:.1f} MW<extra></extra>'
+                ))
+
+                # **6. 予測信頼区間の表示**
+                if len(future_times) > 1:
+                    try:
+                        uncertainty = 0.15  # 15%の不確実性
+                        upper_irradiance = [float(val) * (1 + uncertainty) for val in future_irradiance]
+                        lower_irradiance = [float(val) * (1 - uncertainty) for val in future_irradiance]
+
+                        fig.add_trace(go.Scatter(
+                            x=future_times + future_times[::-1],
+                            y=upper_irradiance + lower_irradiance[::-1],
+                            fill='toself',
+                            fillcolor='rgba(255, 0, 0, 0.1)',
+                            line=dict(color='rgba(255, 255, 255, 0)'),
+                            name='📊 予測信頼区間',
+                            showlegend=True,
+                            hoverinfo='skip'
+                        ))
+                    except Exception as confidence_error:
+                        pass
+
+        except Exception as predictions_error:
+            st.warning("予測データの処理中にエラーが発生しました")
+
+    # **7. 現在時刻の垂直線**
+    fig.add_vline(
+        x=base_time,
+        line_dash="dot",
+        line_color="black",
+        line_width=2,
+        annotation_text="📍 現在時刻",
+        annotation_position="top"
+    )
+
+    # **8. 日の出・日の入り時刻の表示（宮古島）**
+    try:
+        # 宮古島の概算日の出・日の入り時刻
+        sunrise_time = base_time.replace(hour=6, minute=30, second=0, microsecond=0)
+        sunset_time = base_time.replace(hour=18, minute=30, second=0, microsecond=0)
+
+        fig.add_vline(
+            x=sunrise_time,
+            line_dash="dashdot",
+            line_color="gold",
+            line_width=1,
+            annotation_text="🌅 日の出",
+            annotation_position="bottom left"
+        )
+
+        fig.add_vline(
+            x=sunset_time,
+            line_dash="dashdot",
+            line_color="darkorange",
+            line_width=1,
+            annotation_text="🌅 日の入り",
+            annotation_position="bottom right"
+        )
+    except:
+        pass
+
+    # **9. レイアウト設定**
+    try:
+        # X軸の範囲設定
+        if predictions and len(predictions) > 0:
+            max_minutes = max([int(key.replace('min', '')) for key in predictions.keys()])
+            future_end_time = base_time + timedelta(minutes=max_minutes + 30)
+        else:
+            future_end_time = base_time + timedelta(hours=2)
+
+        # 過去データがある場合は開始時刻を調整
+        if historical_data is not None and len(historical_data) > 0:
+            past_start_time = historical_data['datetime'].min()
+            start_time = min(past_start_time, base_time - timedelta(hours=2))
+        else:
+            start_time = base_time - timedelta(hours=1)
+
+        fig.update_layout(
+            title={
+                'text': f"🏝️ 宮古島全土 PV出力統合予測 <br><sub>基準時刻: {base_time.strftime('%Y-%m-%d %H:%M')} | 容量: {pv_capacity:.0f}MW</sub>",
+                'x': 0.5,
+                'font': {'size': 16}
+            },
+            xaxis_title="時刻",
+            yaxis_title="日射強度 (kW/m²)",
+            yaxis2=dict(
+                title="PV出力 (MW)",
+                overlaying='y',
+                side='right',
+                showgrid=False
+            ),
+            xaxis=dict(
+                range=[start_time, future_end_time],
+                tickformat='%m/%d %H:%M',
+                dtick=60 * 60 * 1000,  # 1時間ごと
+                showgrid=True,
+                gridcolor='lightgray'
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='lightgray'
+            ),
+            hovermode='x unified',
+            template='plotly_white',
+            height=600,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.15,
+                xanchor="center",
+                x=0.5,
+                font={'size': 10}
+            ),
+            margin=dict(b=100)  # 下部マージンを増やして凡例のスペースを確保
+        )
+
+        # グリッドとスタイルの調整
+        fig.update_traces(line_width=2)
+
+    except Exception as layout_error:
+        # フォールバック：基本レイアウト
+        fig.update_layout(
+            title="🏝️ 宮古島全土 PV出力統合予測",
+            xaxis_title="時刻",
+            yaxis_title="日射強度 (kW/m²)",
+            template='plotly_white',
+            height=600
+        )
+
+    return fig
+
+
+def create_prediction_chart_with_capacity(input_data, predictions, forecast_labels, pv_capacity):
+    """
+    基本的な予測結果グラフ作成（フォールバック用）
+    """
+    fig = go.Figure()
+
+    # 基準時刻の取得
+    if hasattr(st.session_state, 'prediction_date') and hasattr(st.session_state, 'prediction_time'):
+        base_time = datetime.combine(st.session_state.prediction_date, st.session_state.prediction_time)
+    else:
+        base_time = input_data['datetime'].iloc[-1] if len(input_data) > 0 else datetime.now()
+
+    # 現在の日射強度
+    fig.add_trace(go.Scatter(
+        x=input_data['datetime'],
+        y=input_data['日射強度'],
+        mode='lines+markers',
+        name='🌞 現在の日射強度',
+        line=dict(color='blue', width=3),
+        marker=dict(size=8, color='blue')
+    ))
+
+    # 現在のPV出力
+    fig.add_trace(go.Scatter(
+        x=input_data['datetime'],
+        y=input_data['PV出力'],
+        mode='lines+markers',
+        name='🔋 現在のPV出力 (MW)',
+        line=dict(color='green', width=3),
+        marker=dict(size=8, color='green'),
+        yaxis='y2'
+    ))
+
+    # 予測データの追加
+    if predictions:
+        for time_key, pred_values in predictions.items():
+            if pred_values:
+                minutes_ahead = int(time_key.replace('min', ''))
+                future_time = base_time + timedelta(minutes=minutes_ahead)
+                
+                avg_irradiance = np.mean(pred_values) if isinstance(pred_values, (list, np.ndarray)) else pred_values
+                
+                fig.add_trace(go.Scatter(
+                    x=[future_time],
+                    y=[avg_irradiance],
+                    mode='markers',
+                    name=f'🔮 {time_key}予測',
+                    marker=dict(size=12, color='red')
+                ))
+
+    # レイアウト設定
+    fig.update_layout(
+        title=f"🏝️ 宮古島PV出力予測 (容量: {pv_capacity:.0f}MW)",
+        xaxis_title="時刻",
+        yaxis_title="日射強度 (kW/m²)",
+        yaxis2=dict(
+            title="PV出力 (MW)",
+            overlaying='y',
+            side='right'
+        ),
+        template='plotly_white',
+        height=500
+    )
+
+    return fig
+
+
+def main():
+    """
+    メインアプリケーション（宮古島対応版）
+    """
+    # 最初にセッション状態を初期化
+    init_streamlit_session()
+
+    # PV予測器の初期化
+    predictor = StreamlitPVPredictor()
+
+    # ヘッダー
+    st.markdown("""
+    <div class="main-header">
+        🏝️ 宮古島PV出力予測システム ⚡
+    </div>
+    """, unsafe_allow_html=True)
+
+    # サイドバー：モデル設定
+    st.sidebar.title("🤖 モデル設定")
+
+    # 学習済みモデルフォルダの選択
+    model_folders = []
+    current_dir = Path(".")
+    for item in current_dir.iterdir():
+        if item.is_dir() and "pv_models" in item.name:
+            model_folders.append(str(item))
+
+    # モデルフォルダが見つからない場合はデモフォルダを作成
+    if not model_folders:
+        model_folders = ["miyako_demo_models"]
+        st.sidebar.warning("学習済みモデルフォルダが見つかりません。宮古島デモモードで動作します。")
+
+    # デフォルト値の安全な設定
+    default_model_index = 0
+    if st.session_state.selected_model and st.session_state.selected_model in model_folders:
+        default_model_index = model_folders.index(st.session_state.selected_model)
+
+    st.session_state.selected_model = st.sidebar.selectbox(
+        "使用モデル",
+        model_folders,
+        index=default_model_index,
+        help="学習済みモデルフォルダを選択"
+    )
+
+    # 予測モデルの選択
+    model_options = ["random_forest", "xgboost", "gradient_boosting", "ridge", "linear"]
+    default_model_type_index = 0
+    if st.session_state.model_type in model_options:
+        default_model_type_index = model_options.index(st.session_state.model_type)
+
+    st.session_state.model_type = st.sidebar.selectbox(
+        "予測アルゴリズム",
+        model_options,
+        index=default_model_type_index,
+        help="使用する機械学習アルゴリズム"
+    )
+
+    # 予測時間軸の選択
+    forecast_options = {
+        "15分先": 1,
+        "30分先": 2,
+        "45分先": 3,
+        "1時間先": 4,
+        "2時間先": 8,
+        "3時間先": 12,
+        "6時間先": 24
+    }
+
+    # デフォルト値の安全な設定
+    default_forecasts = ["15分先", "30分先", "1時間先"]
+    if st.session_state.forecast_steps:
+        default_forecasts = st.session_state.forecast_steps
+
+    st.session_state.forecast_steps = st.sidebar.multiselect(
+        "予測時間軸",
+        list(forecast_options.keys()),
+        default=default_forecasts,
+        help="予測したい時間軸を選択"
+    )
+
+    forecast_steps = [forecast_options[key] for key in st.session_state.forecast_steps]
+
+    # Open-Meteo API設定をサイドバーに追加
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌐 API設定")
+
+    st.session_state.api_enabled = st.sidebar.checkbox(
+        "Open-Meteo API使用",
+        value=st.session_state.api_enabled,
+        help="実際の気象データを取得してより精度の高い予測を行います"
+    )
+
+    if st.session_state.api_enabled:
+        st.sidebar.success("✅ API機能が有効です")
+
+        # API接続テスト
+        if st.sidebar.button("🔗 API接続テスト"):
+            with st.spinner("API接続確認中..."):
+                try:
+                    weather_api = OpenMeteoWeatherAPI()
+                    current_weather = weather_api.get_current_weather()
+                    if current_weather:
+                        st.sidebar.success("✅ API接続成功！")
+                        st.sidebar.info(f"現在の宮古島気温: {current_weather['temperature']:.1f}°C")
+                    else:
+                        st.sidebar.error("❌ API接続失敗")
+                except Exception as e:
+                    st.sidebar.error(f"❌ API接続エラー: {str(e)[:50]}...")
+    else:
+        st.sidebar.info("ℹ️ 手動入力モードです")
+
+    # データソース表示
+    if st.session_state.use_openmeteo and hasattr(st.session_state, 'openmeteo_data'):
+        st.sidebar.success(f"📡 API取得データ: {len(st.session_state.openmeteo_data)}件")
+    else:
+        st.sidebar.info("📝 手動入力データ使用中")
+
+    # モデル読み込み
+    with st.spinner("🤖 モデル読み込み中..."):
+        loaded_predictor, model_info = predictor.load_model(st.session_state.selected_model)
+
+    if loaded_predictor is None:
+        st.error("モデルの読み込みに失敗しました")
+        return
+
+    # モデル情報表示
+    if model_info:
+        with st.sidebar.expander("📊 モデル情報"):
+            st.write(f"**保存日時:** {model_info.get('save_date', 'N/A')}")
+            st.write(f"**データ件数:** {model_info.get('data_info', {}).get('total_samples', 'N/A'):,}件")
+            st.write(f"**特徴量数:** {len(model_info.get('feature_columns', []))}")
+            st.write(f"**対象地域:** {model_info.get('location', '宮古島')}")
+
+    # メインコンテンツ
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        # 入力データフォーム
+        input_data = predictor.create_input_data_form()
+
+        # 予測実行 - APIデータまたは通常の入力データで実行
+        if input_data is not None or (
+                hasattr(st.session_state, 'api_prediction_data') and st.session_state.api_prediction_data is not None):
+
+            # APIデータが準備されている場合はそれを使用
+            if hasattr(st.session_state, 'api_prediction_data') and st.session_state.api_prediction_data is not None:
+                input_data = st.session_state.api_prediction_data
+                st.session_state.api_prediction_data = None  # 使用後はクリア
+                st.info("📡 Open-Meteo APIデータを使用して予測を実行します")
+
+            with st.spinner("🔮 予測計算中..."):
+                try:
+                    # 予測時間軸が選択されているかチェック
+                    if not st.session_state.forecast_steps:
+                        st.error("予測時間軸を選択してください")
+                        return
+
+                    if not forecast_steps:
+                        st.error("forecast_stepsが空です。デフォルト値を使用します。")
+                        forecast_steps = [1, 2, 4]
+
+                    # 入力データの情報を表示
+                    st.write(f"**📊 使用データ情報:**")
+                    st.write(f"- データ点数: {len(input_data)}件")
+                    st.write(f"- 時刻範囲: {input_data['datetime'].min()} 〜 {input_data['datetime'].max()}")
+                    st.write(f"- 平均日射強度: {input_data['日射強度'].mean():.3f} kW/m²")
+
+                    # 予測実行
+                    predictions = loaded_predictor.predict_irradiance(
+                        input_data,
+                        model_name=st.session_state.model_type,
+                        forecast_steps=forecast_steps
+                    )
+
+                    if predictions and len(predictions) > 0:
+                        st.success("✅ 予測完了！")
+
+                        # **過去実績データの取得**
+                        historical_data = None
+                        if hasattr(st.session_state, 'openmeteo_data') and st.session_state.openmeteo_data is not None:
+                            historical_data = st.session_state.openmeteo_data
+                            st.info(f"📈 過去実績データ: {len(historical_data)}件を含めて表示")
+                        elif st.session_state.use_openmeteo:
+                            # 追加で過去データを取得
+                            with st.spinner("📊 過去実績データを取得中..."):
+                                try:
+                                    end_date = datetime.now().date()
+                                    start_date = end_date - timedelta(days=3)  # 過去3日間
+
+                                    historical_data = predictor.weather_api.get_historical_weather(
+                                        datetime.combine(start_date, datetime.min.time()),
+                                        datetime.combine(end_date, datetime.max.time())
+                                    )
+
+                                    if historical_data is not None:
+                                        st.info(f"📊 追加取得した過去実績: {len(historical_data)}件")
+                                    else:
+                                        st.warning("過去実績データの取得に失敗しました")
+
+                                except Exception as hist_error:
+                                    st.warning(f"過去データ取得エラー: {hist_error}")
+
+                        # **結果表示（過去実績付き）**
+                        st.subheader("📈 予測結果")
+
+                        # データテーブル作成
+                        try:
+                            report = loaded_predictor.create_prediction_report(input_data, predictions)
+
+                            if report is not None and not report.empty:
+                                # データテーブル表示
+                                st.dataframe(report, use_container_width=True)
+
+                                # **過去実績を含むグラフ表示**
+                                try:
+                                    fig = create_prediction_chart_with_historical(
+                                        input_data=input_data,
+                                        predictions=predictions,
+                                        forecast_labels=st.session_state.forecast_steps,
+                                        pv_capacity=st.session_state.pv_capacity,
+                                        historical_data=historical_data  # 過去データを追加
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                                    # 追加の統計情報
+                                    if historical_data is not None:
+                                        st.markdown("---")
+                                        st.subheader("📊 過去実績統計")
+
+                                        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+
+                                        with col_stat1:
+                                            past_avg = historical_data['日射強度'].mean()
+                                            st.metric("過去平均日射強度", f"{past_avg:.3f} kW/m²")
+
+                                        with col_stat2:
+                                            past_max = historical_data['日射強度'].max()
+                                            st.metric("過去最大日射強度", f"{past_max:.3f} kW/m²")
+
+                                        with col_stat3:
+                                            current_val = st.session_state.current_irradiance
+                                            vs_avg = ((current_val - past_avg) / past_avg * 100) if past_avg > 0 else 0
+                                            st.metric("現在値 vs 平均", f"{vs_avg:+.1f}%")
+
+                                        with col_stat4:
+                                            data_span_hours = (historical_data['datetime'].max() - historical_data[
+                                                'datetime'].min()).total_seconds() / 3600
+                                            st.metric("データ期間", f"{data_span_hours:.0f}時間")
+
+                                except Exception as chart_error:
+                                    st.error(f"グラフ作成エラー: {chart_error}")
+                                    # フォールバック：基本グラフを表示
+                                    try:
+                                        basic_fig = create_prediction_chart_with_capacity(
+                                            input_data, predictions, st.session_state.forecast_steps,
+                                            st.session_state.pv_capacity
+                                        )
+                                        st.plotly_chart(basic_fig, use_container_width=True)
+                                    except:
+                                        st.error("基本グラフの表示にも失敗しました")
+
+
+                                # CSVダウンロード（過去データ付き）
+                                try:
+                                    download_data = report.copy()
+
+                                    # 過去データが利用可能な場合は追加情報を付与
+                                    if historical_data is not None:
+                                        past_avg = historical_data['日射強度'].mean()
+                                        download_data['過去平均日射強度'] = f"{past_avg:.3f}"
+                                        download_data[
+                                            'データ期間'] = f"{historical_data['datetime'].min()} - {historical_data['datetime'].max()}"
+
+                                    csv = download_data.to_csv(index=False, encoding='utf-8-sig')
+                                    st.download_button(
+                                        label="📥 結果をCSVダウンロード（過去データ統計付き）",
+                                        data=csv,
+                                        file_name=f"miyako_pv_prediction_with_historical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                        mime="text/csv"
+                                    )
+                                except Exception as csv_error:
+                                    st.warning(f"CSVダウンロード準備エラー: {csv_error}")
+
+                            else:
+                                st.error("レポート作成に失敗しました")
+
+                        except Exception as report_error:
+                            st.error(f"レポート作成エラー: {report_error}")
+
+                    else:
+                        st.error("予測に失敗しました")
+
+                except Exception as e:
+                    st.error(f"予測エラー: {e}")
+                    import traceback
+                    st.code(f"Error details:\n{traceback.format_exc()}")
+
+    with col2:
+        # 右サイドパネル：宮古島システム情報
+        st.subheader("🏝️ 宮古島システム情報")
+
+        with st.container():
+            st.metric(
+                label="総PV容量",
+                value=f"{st.session_state.pv_capacity:.0f} MW",
+                help="宮古島全土の太陽光発電総容量"
+            )
+
+            st.metric(
+                label="最大期待出力",
+                value=f"{st.session_state.pv_capacity * st.session_state.total_efficiency:.0f} MW",
+                delta=f"効率: {st.session_state.total_efficiency:.1%}",
+                help="現在の条件での最大出力"
+            )
+
+            st.metric(
+                label="予測時間軸",
+                value=f"{len(st.session_state.forecast_steps)}種類",
+                help="選択された予測時間軸の数"
+            )
+
+            st.metric(
+                label="使用アルゴリズム",
+                value=st.session_state.model_type,
+                help="選択された機械学習アルゴリズム"
+            )
+
+        # システム状態
+        st.subheader("🔧 システム状態")
+        st.success("🟢 モデル: 正常")
+        st.success("🟢 予測エンジン: 稼働中")
+
+        # API状態表示
+        if st.session_state.api_enabled:
+            st.success("🟢 Open-Meteo API: 有効")
+        else:
+            st.info("🔵 API: 無効（手動入力モード）")
+
+        st.info("🔵 データ: 準備完了")
+
+        # 現在の宮古島気象条件サマリー
+        st.subheader("🌴 現在の宮古島条件")
+
+        col_weather1, col_weather2 = st.columns(2)
+        with col_weather1:
+            st.write(f"**天候:** {st.session_state.weather_condition}")
+            st.write(f"**気温:** {st.session_state.temperature}°C")
+            st.write(f"**季節:** {st.session_state.season_factor}")
+        with col_weather2:
+            st.write(f"**雲量:** {st.session_state.cloud_cover}%")
+            st.write(f"**日射強度:** {st.session_state.current_irradiance:.3f}")
+            st.write(f"**気象リスク:** {st.session_state.weather_risk}")
+
+        # 効率指標
+        efficiency = st.session_state.total_efficiency
+        if efficiency > 0.18:
+            st.success(f"🌟 発電効率: {efficiency:.1%}")
+        elif efficiency > 0.14:
+            st.info(f"✅ 発電効率: {efficiency:.1%}")
+        else:
+            st.warning(f"⚠️ 発電効率: {efficiency:.1%}")
+
+        # API情報表示（有効時のみ）
+        if st.session_state.api_enabled:
+            st.subheader("🌐 API情報")
+            if hasattr(st.session_state, 'openmeteo_data') and st.session_state.openmeteo_data is not None:
+                st.success(f"📡 取得済みデータ: {len(st.session_state.openmeteo_data)}件")
+
+                # 最新データの概要
+                latest_data = st.session_state.openmeteo_data.tail(1)
+                if len(latest_data) > 0:
+                    latest_row = latest_data.iloc[0]
+                    st.write(f"**最新取得時刻:** {latest_row['datetime'].strftime('%H:%M')}")
+                    st.write(f"**API日射強度:** {latest_row['日射強度']:.3f} kW/m²")
+            else:
+                st.info("データ未取得")
+
+
+if __name__ == "__main__":
+    main()
